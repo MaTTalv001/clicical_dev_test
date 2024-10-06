@@ -191,10 +191,11 @@ if submit_button:
         else:
             query_params[key] = [value]
 
-    encoded_params = urllib.parse.urlencode(query_params, doseq=True)
+    # クエリパラメータをURLエンコード
+    encoded_params = urllib.parse.urlencode(query, doseq=True)
 
     # clinicaltrials.govの検索URLを作成
-    search_url = f"https://clinicaltrials.gov/ct2/results?{encoded_params}"
+    search_url = f"https://clinicaltrials.gov/search?{encoded_params}"
 
     # ボタンを作成
     if st.button('clinicaltrials.govで検索'):
@@ -290,10 +291,7 @@ if submit_button:
             "status": protocol_section.get('statusModule', {}).get('overallStatus'),
             "start_date": parse_date(protocol_section.get('statusModule', {}).get('startDateStruct', {}).get('date')),
             "end_date": parse_date(protocol_section.get('statusModule', {}).get('completionDateStruct', {}).get('date')),
-            "eligibility": {
-                "inclusion_criteria": protocol_section.get('eligibilityModule', {}).get('inclusionCriteria', '').split('\n'),
-                "exclusion_criteria": protocol_section.get('eligibilityModule', {}).get('exclusionCriteria', '').split('\n')
-            },
+            "eligibility": {},
             "interventions": [
                 {
                     "type": intervention.get('type'),
@@ -327,6 +325,18 @@ if submit_button:
             ]
         }
 
+        # 適格基準の処理
+        eligibility_module = protocol_section.get('eligibilityModule', {})
+        structured_data["eligibility"] = {
+            "criteria": clean_html(eligibility_module.get('eligibilityCriteria', '')),
+            "healthy_volunteers": eligibility_module.get('healthyVolunteers'),
+            "sex": eligibility_module.get('sex'),
+            "gender_based": eligibility_module.get('genderBased'),
+            "minimum_age": eligibility_module.get('minimumAge'),
+            "maximum_age": eligibility_module.get('maximumAge'),
+        }
+
+        # 場所情報の処理
         locations_module = protocol_section.get('contactsLocationsModule', {})
         locations = locations_module.get('locations', [])
 
@@ -334,8 +344,8 @@ if submit_button:
             structured_data["locations"] = [
                 {
                     "facility": location.get('facility', {}).get('name') if isinstance(location.get('facility'), dict) else location.get('facility'),
-                    "city": location.get('facility', {}).get('city') if isinstance(location.get('facility'), dict) else None,
-                    "country": location.get('facility', {}).get('country') if isinstance(location.get('facility'), dict) else None
+                    "city": location.get('city'),
+                    "country": location.get('country')
                 }
                 for location in locations if isinstance(location, dict)
             ]
@@ -439,8 +449,7 @@ if submit_button:
     for study in st.session_state.structured_studies:
         for intervention in study['interventions']:
             interventions.append(intervention['name'])
-        eligibility_criteria.extend(study['eligibility']['inclusion_criteria'])
-        eligibility_criteria.extend(study['eligibility']['exclusion_criteria'])
+        eligibility_criteria.append(study['eligibility']['criteria'])
         outcomes['primary'].extend(study['outcomes']['primary'])
         outcomes['secondary'].extend(study['outcomes']['secondary'])
 
@@ -458,26 +467,26 @@ if submit_button:
 
     # LLMを使用して要約文を生成するためのプロンプト
     summary_prompt = f"""
-以下は{num_studies}件の臨床試験データの要約です：
+    以下は{num_studies}件の臨床試験データの要約です：
 
-対象患者: {p}
+    対象患者: {p}
 
-主な介入 (上位5件):
-{', '.join([f"{i[0]} ({i[1]}件)" for i in top_interventions])}
+    主な介入 (上位5件):
+    {', '.join([f"{i[0]} ({i[1]}件)" for i in top_interventions])}
 
-主な適格基準 (上位5件):
-{', '.join([f"{e[0]} ({e[1]}件)" for e in top_eligibility])}
+    主な適格基準 (上位5件):
+    {', '.join([f"{e[0][:50]}... ({e[1]}件)" for e in top_eligibility])}
 
-主要評価項目 (上位5件):
-{', '.join([f"{o[0]} ({o[1]}件)" for o in top_primary_outcomes])}
+    主要評価項目 (上位5件):
+    {', '.join([f"{o[0]} ({o[1]}件)" for o in top_primary_outcomes])}
 
-副次評価項目 (上位5件):
-{', '.join([f"{o[0]} ({o[1]}件)" for o in top_secondary_outcomes])}
+    副次評価項目 (上位5件):
+    {', '.join([f"{o[0]} ({o[1]}件)" for o in top_secondary_outcomes])}
 
-これらの情報を基に、臨床試験の全体的な傾向を簡潔に要約してください。
-特に、どのような患者を対象に、どのような介入を行い、主にどのような結果を評価しているかをまとめてください。
-回答は日本語で、3-4文程度でお願いします。
-"""
+    これらの情報を基に、臨床試験の全体的な傾向を簡潔に要約してください。
+    特に、どのような患者を対象に、どのような介入を行い、主にどのような結果を評価しているかをまとめてください。
+    回答は日本語で、3-4文程度でお願いします。
+    """
 
     with st.spinner("結果を要約中..."):
         response = llm.invoke(summary_prompt)
@@ -512,157 +521,149 @@ if submit_button:
     st.subheader("Top 5 Primary Outcomes:")
     st.table(outcome_df)
 
-# 先行研究の横断的分析
-st.header("先行研究の横断的分析")
+    # 先行研究の横断的分析
+    st.header("先行研究の横断的分析")
 
-if st.session_state.structured_studies:
-    study_summaries = []
-    for study in st.session_state.structured_studies[:5]:  # 最初の5つの研究を分析
-        summary = f"""
-        NCT ID: {study['nct_id']}
-        タイトル: {study['title']}
-        状態: {study['status']}
-        介入: {', '.join([i['name'] for i in study['interventions']])}
-        主要評価項目: {', '.join(study['outcomes']['primary'])}
-        """
-        study_summaries.append(summary)
-
-    cross_study_prompt = f"""
-    以下の臨床試験の要約を分析し、以下の点について横断的な分析を行ってください：
-    1. 共通の介入方法
-    2. 主要評価項目の傾向
-    3. 試験デザインの特徴
-    4. 対象患者の特徴
-
-    {' '.join(study_summaries)}
-
-    回答は箇条書きで、日本語でお願いします。
-    """
-
-    with st.spinner("先行研究の横断的分析を生成中..."):
-        response = llm.invoke(cross_study_prompt)
-        cross_study_analysis = response.content
-
-    st.write(cross_study_analysis)
-
-# Inclusion/Exclusion基準の詳細分析
-st.header("Inclusion/Exclusion基準の詳細分析")
-
-if st.session_state.structured_studies:
-    inclusion_criteria = []
-    exclusion_criteria = []
-    for study in st.session_state.structured_studies:
-        inclusion_criteria.extend(study['eligibility']['inclusion_criteria'])
-        exclusion_criteria.extend(study['eligibility']['exclusion_criteria'])
-
-    criteria_prompt = f"""
-    以下の包含基準と除外基準を分析し、以下の点について要約してください：
-    1. 最も一般的な包含基準
-    2. 最も一般的な除外基準
-    3. 特徴的または珍しい基準
-    4. 年齢や性別に関する傾向
-
-    包含基準:
-    {' '.join(inclusion_criteria)}
-
-    除外基準:
-    {' '.join(exclusion_criteria)}
-
-    回答は箇条書きで、日本語でお願いします。
-    """
-
-    with st.spinner("Inclusion/Exclusion基準の分析を生成中..."):
-        response = llm.invoke(criteria_prompt)
-        criteria_analysis = response.content
-
-    st.write(criteria_analysis)
-
-# 関連文献の要約
-st.header("関連文献の要約")
-
-if st.session_state.structured_studies:
-    publications = []
-    for study in st.session_state.structured_studies:
-        publications.extend(study['publications'])
-
-    if publications:
-        publication_summaries = []
-        for pub in publications[:5]:  # 最初の5つの文献を要約
+    if st.session_state.structured_studies:
+        study_summaries = []
+        for study in st.session_state.structured_studies[:5]:  # 最初の5つの研究を分析
             summary = f"""
-            タイトル: {pub['title']}
-            引用: {pub['citation']}
-            PMID: {pub['pmid']}
+            NCT ID: {study['nct_id']}
+            タイトル: {study['title']}
+            状態: {study['status']}
+            介入: {', '.join([i['name'] for i in study['interventions']])}
+            主要評価項目: {', '.join(study['outcomes']['primary'])}
             """
-            publication_summaries.append(summary)
+            study_summaries.append(summary)
 
-        publication_prompt = f"""
-        以下の臨床試験関連文献を要約し、以下の点について分析してください：
-        1. 主な研究テーマ
-        2. 重要な結果や発見
-        3. 臨床的意義
+        cross_study_prompt = f"""
+        以下の臨床試験の要約を分析し、以下の点について横断的な分析を行ってください：
+        1. 共通の介入方法
+        2. 主要評価項目の傾向
+        3. 試験デザインの特徴
+        4. 対象患者の特徴
 
-        {' '.join(publication_summaries)}
-
-        回答は箇条書きで、日本語でお願いします。
-        """
-
-        with st.spinner("関連文献の要約を生成中..."):
-            response = llm.invoke(publication_prompt)
-            publication_analysis = response.content
-
-        st.write(publication_analysis)
-    else:
-        st.write("関連文献が見つかりませんでした。")
-
-# 複数の試験の横断的な比較分析
-st.header("複数の試験の横断的な比較分析")
-
-if len(st.session_state.structured_studies) >= 2:
-    selected_studies = st.multiselect(
-        "比較分析する試験を2つ以上選択してください：",
-        options=[f"{study['nct_id']}: {study['title']}" for study in st.session_state.structured_studies],
-        default=[f"{st.session_state.structured_studies[0]['nct_id']}: {st.session_state.structured_studies[0]['title']}",
-                 f"{st.session_state.structured_studies[1]['nct_id']}: {st.session_state.structured_studies[1]['title']}"],
-        key='comparison_selector'
-    )
-
-    if len(selected_studies) >= 2:
-        comparison_data = []
-        for selected in selected_studies:
-            nct_id = selected.split(":")[0].strip()
-            study = next((s for s in st.session_state.structured_studies if s['nct_id'] == nct_id), None)
-            if study:
-                comparison_data.append(f"""
-                NCT ID: {study['nct_id']}
-                タイトル: {study['title']}
-                状態: {study['status']}
-                介入: {', '.join([i['name'] for i in study['interventions']])}
-                主要評価項目: {', '.join(study['outcomes']['primary'])}
-                副次評価項目: {', '.join(study['outcomes']['secondary'])}
-                包含基準: {', '.join(study['eligibility']['inclusion_criteria'])}
-                除外基準: {', '.join(study['eligibility']['exclusion_criteria'])}
-                """)
-
-        comparison_prompt = f"""
-        以下の臨床試験を比較分析し、以下の点について要約してください：
-        1. 試験デザインの類似点と相違点
-        2. 介入方法の比較
-        3. 評価項目の違い
-        4. 対象患者の選択基準の違い
-        5. 各試験の強みと弱み
-
-        {' '.join(comparison_data)}
+        {' '.join(study_summaries)}
 
         回答は箇条書きで、日本語でお願いします。
         """
 
-        with st.spinner("試験の比較分析を生成中..."):
-            response = llm.invoke(comparison_prompt)
-            comparison_analysis = response.content
+        with st.spinner("先行研究の横断的分析を生成中..."):
+            response = llm.invoke(cross_study_prompt)
+            cross_study_analysis = response.content
 
-        st.write(comparison_analysis)
-    else:
-        st.write("比較するには2つ以上の試験を選択してください。")
+        st.write(cross_study_analysis)
+
+    # Inclusion/Exclusion基準の詳細分析
+    st.header("適格基準の詳細分析")
+
+    if st.session_state.structured_studies:
+        eligibility_criteria = [study['eligibility']['criteria'] for study in st.session_state.structured_studies]
+
+        criteria_prompt = f"""
+        以下の適格基準を分析し、以下の点について要約してください：
+        1. 最も一般的な包含基準
+        2. 最も一般的な除外基準
+        3. 特徴的または珍しい基準
+        4. 年齢や性別に関する傾向
+
+        適格基準:
+        {' '.join(eligibility_criteria)}
+
+        回答は箇条書きで、日本語でお願いします。
+        """
+
+        with st.spinner("適格基準の分析を生成中..."):
+            response = llm.invoke(criteria_prompt)
+            criteria_analysis = response.content
+
+        st.write(criteria_analysis)
+
+    # 関連文献の要約
+    st.header("関連文献の要約")
+
+    if st.session_state.structured_studies:
+        publications = []
+        for study in st.session_state.structured_studies:
+            publications.extend(study['publications'])
+
+        if publications:
+            publication_summaries = []
+            for pub in publications[:5]:  # 最初の5つの文献を要約
+                summary = f"""
+                タイトル: {pub['title']}
+                引用: {pub['citation']}
+                PMID: {pub['pmid']}
+                """
+                publication_summaries.append(summary)
+
+            publication_prompt = f"""
+            以下の臨床試験関連文献を要約し、以下の点について分析してください：
+            1. 主な研究テーマ
+            2. 重要な結果や発見
+            3. 臨床的意義
+
+            {' '.join(publication_summaries)}
+
+            回答は箇条書きで、日本語でお願いします。
+            """
+
+            with st.spinner("関連文献の要約を生成中..."):
+                response = llm.invoke(publication_prompt)
+                publication_analysis = response.content
+
+            st.write(publication_analysis)
+        else:
+            st.write("関連文献が見つかりませんでした。")
+
+    # 複数の試験の横断的な比較分析
+    st.header("複数の試験の横断的な比較分析")
+
+    if len(st.session_state.structured_studies) >= 2:
+        selected_studies = st.multiselect(
+            "比較分析する試験を2つ以上選択してください：",
+            options=[f"{study['nct_id']}: {study['title']}" for study in st.session_state.structured_studies],
+            default=[f"{st.session_state.structured_studies[0]['nct_id']}: {st.session_state.structured_studies[0]['title']}",
+                    f"{st.session_state.structured_studies[1]['nct_id']}: {st.session_state.structured_studies[1]['title']}"],
+            key='comparison_selector'
+        )
+
+        if len(selected_studies) >= 2:
+            comparison_data = []
+            for selected in selected_studies:
+                nct_id = selected.split(":")[0].strip()
+                study = next((s for s in st.session_state.structured_studies if s['nct_id'] == nct_id), None)
+                if study:
+                    comparison_data.append(f"""
+                    NCT ID: {study['nct_id']}
+                    タイトル: {study['title']}
+                    状態: {study['status']}
+                    介入: {', '.join([i['name'] for i in study['interventions']])}
+                    主要評価項目: {', '.join(study['outcomes']['primary'])}
+                    副次評価項目: {', '.join(study['outcomes']['secondary'])}
+                    適格基準: {study['eligibility']['criteria']}
+                    """)
+
+            comparison_prompt = f"""
+            以下の臨床試験を比較分析し、以下の点について要約してください：
+            1. 試験デザインの類似点と相違点
+            2. 介入方法の比較
+            3. 評価項目の違い
+            4. 対象患者の選択基準の違い
+            5. 各試験の強みと弱み
+
+            {' '.join(comparison_data)}
+
+            回答は箇条書きで、日本語でお願いします。
+            """
+
+            with st.spinner("試験の比較分析を生成中..."):
+                response = llm.invoke(comparison_prompt)
+                comparison_analysis = response.content
+
+            st.write(comparison_analysis)
+        else:
+            st.write("比較するには2つ以上の試験を選択してください。")
 
 # プロトコルドラフト生成支援
 st.header("プロトコルドラフト生成支援")
