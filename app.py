@@ -12,7 +12,7 @@ os.environ['AWS_DEFAULT_REGION'] = st.secrets["AWS_DEFAULT_REGION"]
 bedrock = boto3.client('bedrock-runtime')
 
 # BedrockChatモデルの初期化
-llm = BedrockChat(model_id="anthropic.claude-v2:1", client=bedrock)
+llm = BedrockChat(model_id="anthropic.claude-3-5-sonnet-20240620-v1:0", client=bedrock)
 
 st.title("Bedrock Chat Application")
 
