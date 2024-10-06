@@ -12,6 +12,12 @@ import urllib.parse
 
 from langchain_community.chat_models import BedrockChat
 
+# セッション状態の初期化
+if 'structured_studies' not in st.session_state:
+    st.session_state.structured_studies = []
+if 'selected_studies' not in st.session_state:
+    st.session_state.selected_studies = []
+
 # AWSの認証情報を環境変数から取得
 os.environ['AWS_ACCESS_KEY_ID'] = st.secrets["AWS_ACCESS_KEY_ID"]
 os.environ['AWS_SECRET_ACCESS_KEY'] = st.secrets["AWS_SECRET_ACCESS_KEY"]
@@ -135,11 +141,11 @@ APIリクエストのクエリを<output_example>を参考にJSON形式で出力
 st.header("PICO情報の入力")
 
 with st.form(key='pico_form'):
-    p = st.text_input("Patient (対象患者):")
-    i = st.text_input("Intervention (介入):")
-    c = st.text_input("Comparison (比較対象):")
-    o = st.text_input("Outcome (結果):")
-    additional = st.text_input("Additional conditions (追加条件):")
+    p = st.text_input("Patient (対象患者):", key='p')
+    i = st.text_input("Intervention (介入):", key='i')
+    c = st.text_input("Comparison (比較対象):", key='c')
+    o = st.text_input("Outcome (結果):", key='o')
+    additional = st.text_input("Additional conditions (追加条件):", key='additional')
     submit_button = st.form_submit_button(label='検索')
 
 if submit_button:
@@ -340,13 +346,13 @@ if submit_button:
 
     with st.spinner("データを構造化中..."):
         # 臨床試験データの構造化
-        structured_studies = [structure_clinical_trial(study) for study in studies if study is not None]
-        structured_studies = [study for study in structured_studies if study is not None]
+        st.session_state.structured_studies = [structure_clinical_trial(study) for study in studies if study is not None]
+        st.session_state.structured_studies = [study for study in st.session_state.structured_studies if study is not None]
 
-    st.success(f"Structured data for {len(structured_studies)} studies has been prepared.")
+    st.success(f"Structured data for {len(st.session_state.structured_studies)} studies has been prepared.")
 
     # データフレームへの変換
-    df = pd.DataFrame(structured_studies)
+    df = pd.DataFrame(st.session_state.structured_studies)
 
     # データフレームの表示
     st.subheader("構造化データの表示")
@@ -369,13 +375,13 @@ if submit_button:
     st.header("検索結果一覧")
 
     # 試験のタイトルとNCT IDを表示
-    study_options = [f"{study['nct_id']}: {study['title']}" for study in structured_studies if study['title']]
-    selected_studies = st.multiselect("詳細を確認したい試験を選択してください:", study_options)
+    study_options = [f"{study['nct_id']}: {study['title']}" for study in st.session_state.structured_studies if study['title']]
+    st.session_state.selected_studies = st.multiselect("詳細を確認したい試験を選択してください:", study_options, key='study_selector')
 
     # 選択された試験の詳細表示
-    for study_option in selected_studies:
+    for study_option in st.session_state.selected_studies:
         nct_id = study_option.split(":")[0]
-        study = next((s for s in structured_studies if s['nct_id'] == nct_id), None)
+        study = next((s for s in st.session_state.structured_studies if s['nct_id'] == nct_id), None)
         if study:
             st.subheader(f"{study['nct_id']}: {study['title']}")
             st.write(f"**ステータス:** {study['status']}")
@@ -392,8 +398,8 @@ if submit_button:
             st.write("---")
 
     # 選択された試験の横断的な要約
-    if selected_studies:
-        selected_study_data = [study for study in structured_studies if f"{study['nct_id']}: {study['title']}" in selected_studies]
+    if st.session_state.selected_studies:
+        selected_study_data = [study for study in st.session_state.structured_studies if f"{study['nct_id']}: {study['title']}" in st.session_state.selected_studies]
         summary_prompt = f"""
 以下の臨床試験の情報を基に、共通点や相違点を要約してください。
 
@@ -423,14 +429,14 @@ if submit_button:
     # データの分析と可視化
     st.header("結果の要約と可視化")
 
-    num_studies = len(structured_studies)
+    num_studies = len(st.session_state.structured_studies)
 
     # 介入、適格基準、アウトカムの集計
     interventions = []
     eligibility_criteria = []
     outcomes = {'primary': [], 'secondary': []}
 
-    for study in structured_studies:
+    for study in st.session_state.structured_studies:
         for intervention in study['interventions']:
             interventions.append(intervention['name'])
         eligibility_criteria.extend(study['eligibility']['inclusion_criteria'])
@@ -506,12 +512,12 @@ if submit_button:
     st.subheader("Top 5 Primary Outcomes:")
     st.table(outcome_df)
 
-    # 先行研究の横断的分析
+# 先行研究の横断的分析
 st.header("先行研究の横断的分析")
 
-if structured_studies:
+if st.session_state.structured_studies:
     study_summaries = []
-    for study in structured_studies[:5]:  # 最初の5つの研究を分析
+    for study in st.session_state.structured_studies[:5]:  # 最初の5つの研究を分析
         summary = f"""
         NCT ID: {study['nct_id']}
         タイトル: {study['title']}
@@ -542,10 +548,10 @@ if structured_studies:
 # Inclusion/Exclusion基準の詳細分析
 st.header("Inclusion/Exclusion基準の詳細分析")
 
-if structured_studies:
+if st.session_state.structured_studies:
     inclusion_criteria = []
     exclusion_criteria = []
-    for study in structured_studies:
+    for study in st.session_state.structured_studies:
         inclusion_criteria.extend(study['eligibility']['inclusion_criteria'])
         exclusion_criteria.extend(study['eligibility']['exclusion_criteria'])
 
@@ -574,9 +580,9 @@ if structured_studies:
 # 関連文献の要約
 st.header("関連文献の要約")
 
-if structured_studies:
+if st.session_state.structured_studies:
     publications = []
-    for study in structured_studies:
+    for study in st.session_state.structured_studies:
         publications.extend(study['publications'])
 
     if publications:
@@ -611,19 +617,20 @@ if structured_studies:
 # 複数の試験の横断的な比較分析
 st.header("複数の試験の横断的な比較分析")
 
-if len(structured_studies) >= 2:
+if len(st.session_state.structured_studies) >= 2:
     selected_studies = st.multiselect(
         "比較分析する試験を2つ以上選択してください：",
-        options=[f"{study['nct_id']}: {study['title']}" for study in structured_studies],
-        default=[f"{structured_studies[0]['nct_id']}: {structured_studies[0]['title']}",
-                 f"{structured_studies[1]['nct_id']}: {structured_studies[1]['title']}"]
+        options=[f"{study['nct_id']}: {study['title']}" for study in st.session_state.structured_studies],
+        default=[f"{st.session_state.structured_studies[0]['nct_id']}: {st.session_state.structured_studies[0]['title']}",
+                 f"{st.session_state.structured_studies[1]['nct_id']}: {st.session_state.structured_studies[1]['title']}"],
+        key='comparison_selector'
     )
 
     if len(selected_studies) >= 2:
         comparison_data = []
         for selected in selected_studies:
             nct_id = selected.split(":")[0].strip()
-            study = next((s for s in structured_studies if s['nct_id'] == nct_id), None)
+            study = next((s for s in st.session_state.structured_studies if s['nct_id'] == nct_id), None)
             if study:
                 comparison_data.append(f"""
                 NCT ID: {study['nct_id']}
@@ -660,14 +667,14 @@ if len(structured_studies) >= 2:
 # プロトコルドラフト生成支援
 st.header("プロトコルドラフト生成支援")
 
-if structured_studies:
+if st.session_state.structured_studies:
     st.write("収集した情報を基に、新しい臨床試験のプロトコルドラフトを生成します。")
     
-    target_condition = st.text_input("対象疾患：")
-    intervention = st.text_input("介入方法：")
-    primary_outcome = st.text_input("主要評価項目：")
+    target_condition = st.text_input("対象疾患：", key='target_condition')
+    intervention = st.text_input("介入方法：", key='intervention')
+    primary_outcome = st.text_input("主要評価項目：", key='primary_outcome')
 
-    if st.button("プロトコルドラフトを生成"):
+    if st.button("プロトコルドラフトを生成", key='generate_protocol'):
         protocol_prompt = f"""
         以下の情報を基に、新しい臨床試験のプロトコルドラフトを生成してください：
 
@@ -676,7 +683,7 @@ if structured_studies:
         主要評価項目: {primary_outcome}
 
         既存の臨床試験データ:
-        {' '.join([f"NCT ID: {s['nct_id']}, タイトル: {s['title']}, 状態: {s['status']}, 介入: {', '.join([i['name'] for i in s['interventions']])}, 主要評価項目: {', '.join(s['outcomes']['primary'])}" for s in structured_studies[:5]])}
+        {' '.join([f"NCT ID: {s['nct_id']}, タイトル: {s['title']}, 状態: {s['status']}, 介入: {', '.join([i['name'] for i in s['interventions']])}, 主要評価項目: {', '.join(s['outcomes']['primary'])}" for s in st.session_state.structured_studies[:5]])}
 
         プロトコルドラフトには以下の項目を含めてください：
         1. 試験の背景と目的
@@ -695,3 +702,9 @@ if structured_studies:
 
         st.subheader("生成されたプロトコルドラフト")
         st.write(protocol_draft)
+
+# セッション状態の維持
+if 'structured_studies' in st.session_state:
+    st.session_state.structured_studies = st.session_state.structured_studies
+if 'selected_studies' in st.session_state:
+    st.session_state.selected_studies = st.session_state.selected_studies
