@@ -2,21 +2,18 @@ import streamlit as st
 import os
 import json
 import boto3
-import requests
-import re
-import matplotlib.pyplot as plt
-from collections import Counter
 import pandas as pd
-from datetime import datetime
 import urllib.parse
-
 from langchain_community.chat_models import BedrockChat
+from prompts import (SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, SUMMARY_PROMPT_TEMPLATE,
+                     CROSS_STUDY_PROMPT, CRITERIA_PROMPT, PUBLICATION_PROMPT,
+                     COMPARISON_PROMPT, PROTOCOL_PROMPT)
+from utils import get_top_items, convert_df_to_csv
+from api_handler import APIHandler
+from visualizer import Visualizer
 
-# セッション状態の初期化
-if 'structured_studies' not in st.session_state:
-    st.session_state.structured_studies = []
-if 'selected_studies' not in st.session_state:
-    st.session_state.selected_studies = []
+# Streamlitアプリの設定
+st.set_page_config(page_title="Clinical Trials Search and Analysis App", layout="wide")
 
 # AWSの認証情報を環境変数から取得
 os.environ['AWS_ACCESS_KEY_ID'] = st.secrets["AWS_ACCESS_KEY_ID"]
@@ -29,351 +26,139 @@ bedrock = boto3.client('bedrock-runtime')
 # BedrockChatモデルの初期化
 llm = BedrockChat(model_id="anthropic.claude-3-5-sonnet-20240620-v1:0", client=bedrock)
 
-# Streamlit app starts here
-st.title("Clinical Trials Search and Analysis App")
+# APIハンドラーの初期化
+api_handler = APIHandler("https://clinicaltrials.gov/api/v2/studies")
 
-st.write("このアプリでは、PICO形式で入力された情報に基づいてclinicaltrials.govから臨床試験を検索し、結果を要約・可視化します。")
+# セッション状態の初期化
+if 'structured_studies' not in st.session_state:
+    st.session_state.structured_studies = []
+if 'selected_studies' not in st.session_state:
+    st.session_state.selected_studies = []
+if 'search_performed' not in st.session_state:
+    st.session_state.search_performed = False
+if 'total_count' not in st.session_state:
+    st.session_state.total_count = 0
 
-# APIドキュメント（clinicaltrials.gov公式）
-api_document = '''
-### Query Parameters:
-- **query.cond**: "Conditions or disease" query in Essie expression syntax. Searches in the `ConditionSearch` area.
-  *例*: `lung cancer`、`(head OR neck) AND pain`
-- **query.term**: "Other terms" query in Essie expression syntax. Searches in the `BasicSearch` area.
-  *例*: `AREA[LastUpdatePostDate]RANGE[2023-01-15,MAX]`
-- **query.locn**: "Location terms" query in Essie expression syntax. Searches in the `LocationSearch` area.
-- **query.titles**: "Title / acronym" query in Essie expression syntax. Searches in the `TitleSearch` area.
-- **query.intr**: "Intervention / treatment" query in Essie expression syntax. Searches in the `InterventionSearch` area.
-- **query.outc**: "Outcome measure" query in Essie expression syntax. Searches in the `OutcomeSearch` area.
-- **query.spons**: "Sponsor / collaborator" query in Essie expression syntax. Searches in the `SponsorSearch` area.
-- **query.lead**: Searches in the `LeadSponsorName` field.
-- **query.id**: "Study IDs" query in Essie expression syntax. Searches in the `IdSearch` area.
-- **query.patient**: Searches in the `PatientSearch` area.
+@st.cache_data
+def cached_fetch_and_structure_studies(query):
+    return api_handler.fetch_and_structure_studies(query)
 
-### Filter Parameters:
-- **filter.overallStatus**: filter.overallStatus values must be encoded as comma-separated list.
-  *Allowed values*:
-  ACTIVE_NOT_RECRUITING
-COMPLETED
-ENROLLING_BY_INVITATION
-NOT_YET_RECRUITING
-RECRUITING
-SUSPENDED
-TERMINATED
-WITHDRAWN
-AVAILABLE
-NO_LONGER_AVAILABLE
-TEMPORARILY_NOT_AVAILABLE
-APPROVED_FOR_MARKETING
-WITHHELD
-UNKNOWN
+def main():
+    st.title("Clinical Trials Search and Analysis App")
+    
+    st.write("このアプリでは、PICO形式で入力された情報に基づいてclinicaltrials.govから臨床試験を検索し、結果を要約・可視化します。")
 
-*Examples*:
-- `[ NOT_YET_RECRUITING, RECRUITING ]`
-- `[ COMPLETED ]`
-- **filter.geo**: Filter by geographic location using the `distance` function.
-*Format*: `distance(latitude,longitude,distance)`
-*Examples*:
-- `distance(39.0035707,-77.1013313,50mi)`
-- **filter.ids**: Filter by a list of NCT IDs.
-*Examples*:
-- `[ NCT04852770, NCT01728545, NCT02109302 ]`
-- **filter.advanced**: Filter by a query in Essie expression syntax.
-*Examples*:
-- `AREA[StartDate]2022`
-- `AREA[MinimumAge]RANGE[MIN, 16 years] AND AREA[MaximumAge]RANGE[16 years, MAX]`
-- **filter.synonyms**: Filter by a list of area:synonym_id pairs.
-*Examples*:
-- `[ ConditionSearch:1651367, BasicSearch:2013558 ]`
-### Sort Parameters:
-- **sort**: Comma- or pipe-separated list of sorting options.
-*Examples*:
-- `[ @relevance ]`
-- `[ LastUpdatePostDate ]`
-- `[ EnrollmentCount:desc, NumArmGroups ]`
-**Note**: Sorting by `@relevance`, date fields, or numeric fields is supported. Default sort direction is descending for date fields and `@relevance`, ascending for numeric fields.
-### Other Parameters:
-- **format**: Response format.
-*Allowed values*: `json`, `csv`
-*Default*: `json`
-- **markupFormat**: Format of markup type fields (applicable only to `json` format).
-*Allowed values*: `markdown`, `legacy`
-*Default*: `markdown`
-- **fields**: List of fields to include in the response.
-*Examples*:
-- `[ NCTId, BriefTitle, OverallStatus, HasResults ]`
-- `[ ProtocolSection ]`
-- **countTotal**: Whether to include the total count of studies.
-*Allowed values*: `true`, `false`
-*Default*: `false`
-- **pageSize**: Number of studies per page.
-*Default*: `10`
-*Maximum*: `1000`
-*Examples*: `2`, `100`
-- **pageToken**: Token to get the next page. Use the `nextPageToken` value returned in the previous response.
-### Important Notes:
-- **filter.lastUpdatePostDate** is not a valid parameter in the updated API. Instead, you should use **filter.advanced** with the appropriate Essie expression.
-*For example*, to filter by last update post date:
-```plaintext
-filter.advanced: AREA[LastUpdatePostDate]RANGE[2023-01-15,MAX]
-The Essie expression syntax allows for advanced querying and filtering within specified areas.
-'''
+    # PICO入力フォーム
+    submitted, p, i, c, o, additional = input_pico_form()
+    
+    if submitted or st.session_state.search_performed:
+        if submitted:
+            # 新しい検索が行われた場合
+            query = generate_query(p, i, c, o, additional)
+            if query:
+                st.session_state.structured_studies, st.session_state.total_count = cached_fetch_and_structure_studies(query)
+                st.session_state.search_performed = True
+        
+        # 結果の表示と分析
+        display_results(st.session_state.structured_studies, st.session_state.total_count)
+        analyze_studies(st.session_state.structured_studies, p)
+        
+        # プロトコルドラフト生成支援
+        generate_protocol_draft(st.session_state.structured_studies)
 
-# システムプロンプトの設定
-system_prompt = f"""あなたはライフサイエンス分野の学術的なプロフェッショナルです。
-APIリクエストのクエリを<output_example>を参考にJSON形式で出力してください。JSON形式で用いるので、不要な情報は述べないでください。
-<api-document>
-{api_document}
-</api-document>
+def input_pico_form():
+    with st.form(key='pico_form'):
+        p = st.text_input("Patient (対象患者):", key='p')
+        i = st.text_input("Intervention (介入):", key='i')
+        c = st.text_input("Comparison (比較対象):", key='c')
+        o = st.text_input("Outcome (結果):", key='o')
+        additional = st.text_input("Additional conditions (追加条件):", key='additional')
+        submitted = st.form_submit_button(label='検索')
+    return submitted, p, i, c, o, additional
 
-<output_example>
-{{
-  "query.cond": "(type 2 diabetes)",
-  "query.intr": "(DPP4 inhibitor) AND (SGLT2 inhibitor)",
-  "filter.overallStatus": "COMPLETED",
-  "filter.advanced": "AREA[CompletionDate]RANGE[1/1/2017, 1/1/2024] AND AREA[Phase]PHASE3",
-  "sort": ["LastUpdatePostDate:desc"]
-}}
-</output_example>
-"""
-
-# StreamlitでのPICO入力フォーム
-st.header("PICO情報の入力")
-
-with st.form(key='pico_form'):
-    p = st.text_input("Patient (対象患者):", key='p')
-    i = st.text_input("Intervention (介入):", key='i')
-    c = st.text_input("Comparison (比較対象):", key='c')
-    o = st.text_input("Outcome (結果):", key='o')
-    additional = st.text_input("Additional conditions (追加条件):", key='additional')
-    submit_button = st.form_submit_button(label='検索')
-
-if submit_button:
-    # ユーザー入力をもとに指示を生成
-    user_prompt = f"""以下のような臨床学的な問いに関連する臨床試験を探しています
-なおそれぞれのタグの意味は以下の通りです
-<patient>にはどのような患者を対象としているかを示しています
-<intervention>にはどのような投与などを治療をした際に、という条件が示されています
-<comparison>には何と比較した結果を調べるか、を示しています
-<outcome>にはどのような結果になるか、を示しています
-<patient>{p}</patient>
-<intervention>{i}</intervention>
-<comparison>{c}</comparison>
-<outcome>{o}</outcome>
-<additional_condition>{additional}</additional_condition>
-<tips>
-- 2種の医薬品の結果を比較するような臨床試験を検索する場合は、Interventionの項目に2種の医薬品を入れた条件で検索する必要があります
-- "fields"を利用する必要はありません
-- クエリ文字列でスペースをバックスラッシュなどでエスケープする必要はありません
-</tips>"""
-
-    # LLMにプロンプトを入力し、クエリを生成
+def generate_query(p, i, c, o, additional):
+    user_prompt = USER_PROMPT_TEMPLATE.format(p=p, i=i, c=c, o=o, additional=additional)
+    
     with st.spinner("クエリを生成中..."):
-        response = llm.invoke(system_prompt + "\n" + user_prompt)
+        response = llm.invoke(SYSTEM_PROMPT + "\n" + user_prompt)
 
-    # 生成されたクエリを表示
     st.subheader("生成されたクエリ:")
     st.code(response.content, language='json')
 
-    # JSONとして解析できるか確認
     try:
         query = json.loads(response.content)
         st.success("クエリのパースに成功しました。")
+        
+        # clinicaltrials.govのURLを生成
+        ct_gov_url = create_clinicaltrials_gov_url(query)
+        
+        # リンクボタンを作成
+        st.markdown(f"[ClinicalTrials.govで確認する]({ct_gov_url})")
+        
+        return query
     except json.JSONDecodeError:
         st.error("生成されたクエリが正しいJSON形式ではありません。")
-        st.stop()
+        return None
+    
+def create_clinicaltrials_gov_url(query):
+    base_url = "https://clinicaltrials.gov/search?"
+    params = {}
+    
+    if 'query.cond' in query:
+        params['cond'] = query['query.cond']
+    
+    if 'query.intr' in query:
+        params['intr'] = query['query.intr']
+    
+    if 'filter.overallStatus' in query:
+        status_map = {
+            'COMPLETED': 'e',
+            'RECRUITING': 'r',
+            'NOT_YET_RECRUITING': 'n',
+            'ACTIVE_NOT_RECRUITING': 'a',
+            'TERMINATED': 't',
+            'WITHDRAWN': 'w',
+            'SUSPENDED': 's'
+        }
+        params['recrs'] = status_map.get(query['filter.overallStatus'], '')
+    
+    if 'filter.advanced' in query:
+        advanced = query['filter.advanced']
+        if 'AREA[StartDate]RANGE' in advanced:
+            date_range = advanced.split('RANGE')[1].strip('[]').split(',')
+            start_date = date_range[0].strip()
+            end_date = date_range[1].strip()
+            params['start'] = f"{start_date}_{end_date}"
+    
+    if 'sort' in query:
+        sort_options = query['sort']
+        if isinstance(sort_options, list) and sort_options:
+            if 'LastUpdatePostDate:desc' in sort_options:
+                params['sort'] = 'nwst'
+    
+    encoded_params = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
+    return base_url + encoded_params
 
-    # クエリパラメータをURLエンコード
-    query_params = {}
-    for key, value in query.items():
-        if isinstance(value, list):
-            query_params[key] = value
-        else:
-            query_params[key] = [value]
-
-    # クエリパラメータをURLエンコード
-    encoded_params = urllib.parse.urlencode(query, doseq=True)
-
-    # clinicaltrials.govの検索URLを作成
-    search_url = f"https://clinicaltrials.gov/search?{encoded_params}"
-
-    # ボタンを作成
-    if st.button('clinicaltrials.govで検索'):
-        st.markdown(f"[生成されたクエリでclinicaltrials.govを検索する]({search_url})", unsafe_allow_html=True)
-
-    # APIエンドポイント
-    api_url = "https://clinicaltrials.gov/api/v2/studies"
-
-    # リクエストパラメータの設定
-    params = {
-        'format': 'json',
-        'pageSize': 100,  # 1ページあたりの結果数
-        'countTotal': 'true',  # 総結果数を取得
-    }
-
-    # クエリパラメータを追加
-    for key, value in query.items():
-        if isinstance(value, list):
-            params[key] = ','.join(value)
-        else:
-            params[key] = value
-
-    # デバッグ用にリクエストパラメータを表示（オプション）
-    st.write("Request Parameters:")
-    st.write(params)
-
-    def fetch_studies(params):
-        all_studies = []
-        total_count = 0
-
-        while True:
-            response = requests.get(api_url, params=params)
-
-            if response.status_code != 200:
-                st.error(f"Error: {response.status_code}")
-                st.write(response.text)
-                break
-
-            data = response.json()
-
-            if 'studies' in data:
-                all_studies.extend(data['studies'])
-
-            if 'totalCount' in data:
-                total_count = data['totalCount']
-
-            if 'nextPageToken' in data:
-                params['pageToken'] = data['nextPageToken']
-            else:
-                break  # 最後のページに到達
-
-        return all_studies, total_count
-
-    # 臨床試験データの取得
+def fetch_and_structure_studies(query):
     with st.spinner("臨床試験データを取得中..."):
-        studies, total_count = fetch_studies(params)
+        structured_studies, total_count = api_handler.fetch_and_structure_studies(query)
+    
+    st.session_state.structured_studies = structured_studies
+    return structured_studies, total_count
 
-    # 結果の表示
+def display_results(studies, total_count):
     st.subheader(f"Total studies found: {total_count}")
     st.write(f"Studies retrieved: {len(studies)}")
 
-    # 臨床試験データの構造化
-    def clean_html(raw_html):
-        cleanr = re.compile('<.*?>')
-        cleantext = re.sub(cleanr, '', raw_html)
-        return cleantext
-
-    def parse_date(date_string):
-        if date_string:
-            try:
-                return datetime.strptime(date_string, "%B %d, %Y").strftime("%Y-%m-%d")
-            except ValueError:
-                return date_string
-        return None
-
-    def structure_clinical_trial(study):
-        if not isinstance(study, dict):
-            print(f"Warning: Unexpected study data type: {type(study)}")
-            return None
-
-        protocol_section = study.get('protocolSection', {})
-        derived_section = study.get('derivedSection', {})
-
-        if not isinstance(protocol_section, dict) or not isinstance(derived_section, dict):
-            print(f"Warning: Unexpected data structure in study")
-            return None
-
-        structured_data = {
-            "nct_id": protocol_section.get('identificationModule', {}).get('nctId'),
-            "title": protocol_section.get('identificationModule', {}).get('officialTitle'),
-            "brief_summary": clean_html(protocol_section.get('descriptionModule', {}).get('briefSummary', '')),
-            "detailed_description": clean_html(protocol_section.get('descriptionModule', {}).get('detailedDescription', '')),
-            "status": protocol_section.get('statusModule', {}).get('overallStatus'),
-            "start_date": parse_date(protocol_section.get('statusModule', {}).get('startDateStruct', {}).get('date')),
-            "end_date": parse_date(protocol_section.get('statusModule', {}).get('completionDateStruct', {}).get('date')),
-            "eligibility": {},
-            "interventions": [
-                {
-                    "type": intervention.get('type'),
-                    "name": intervention.get('name'),
-                    "description": intervention.get('description')
-                }
-                for intervention in protocol_section.get('armsInterventionsModule', {}).get('interventions', [])
-            ],
-            "outcomes": {
-                "primary": [
-                    outcome.get('measure')
-                    for outcome in protocol_section.get('outcomesModule', {}).get('primaryOutcomes', [])
-                ],
-                "secondary": [
-                    outcome.get('measure')
-                    for outcome in protocol_section.get('outcomesModule', {}).get('secondaryOutcomes', [])
-                ]
-            },
-            "sponsor": {
-                "name": protocol_section.get('sponsorCollaboratorsModule', {}).get('leadSponsor', {}).get('name'),
-                "type": protocol_section.get('sponsorCollaboratorsModule', {}).get('leadSponsor', {}).get('class')
-            },
-            "locations": [],
-            "publications": [
-                {
-                    "title": reference.get('title'),
-                    "citation": reference.get('citation'),
-                    "pmid": reference.get('pmid')
-                }
-                for reference in derived_section.get('publicationModule', {}).get('references', [])
-            ]
-        }
-
-        # 適格基準の処理
-        eligibility_module = protocol_section.get('eligibilityModule', {})
-        structured_data["eligibility"] = {
-            "criteria": clean_html(eligibility_module.get('eligibilityCriteria', '')),
-            "healthy_volunteers": eligibility_module.get('healthyVolunteers'),
-            "sex": eligibility_module.get('sex'),
-            "gender_based": eligibility_module.get('genderBased'),
-            "minimum_age": eligibility_module.get('minimumAge'),
-            "maximum_age": eligibility_module.get('maximumAge'),
-        }
-
-        # 場所情報の処理
-        locations_module = protocol_section.get('contactsLocationsModule', {})
-        locations = locations_module.get('locations', [])
-
-        if isinstance(locations, list):
-            structured_data["locations"] = [
-                {
-                    "facility": location.get('facility', {}).get('name') if isinstance(location.get('facility'), dict) else location.get('facility'),
-                    "city": location.get('city'),
-                    "country": location.get('country')
-                }
-                for location in locations if isinstance(location, dict)
-            ]
-        elif isinstance(locations, str):
-            structured_data["locations"] = [{"facility": locations, "city": None, "country": None}]
-
-        return structured_data
-
-    with st.spinner("データを構造化中..."):
-        # 臨床試験データの構造化
-        st.session_state.structured_studies = [structure_clinical_trial(study) for study in studies if study is not None]
-        st.session_state.structured_studies = [study for study in st.session_state.structured_studies if study is not None]
-
-    st.success(f"Structured data for {len(st.session_state.structured_studies)} studies has been prepared.")
-
     # データフレームへの変換
-    df = pd.DataFrame(st.session_state.structured_studies)
+    df = pd.DataFrame(studies)
 
     # データフレームの表示
     st.subheader("構造化データの表示")
     st.dataframe(df)
 
     # データのダウンロード
-    def convert_df(df):
-        return df.to_csv(index=False).encode('utf-8')
-
-    csv = convert_df(df)
-
+    csv = convert_df_to_csv(df)
     st.download_button(
         label="CSVとしてダウンロード",
         data=csv,
@@ -381,17 +166,14 @@ if submit_button:
         mime='text/csv',
     )
 
-    # 検索結果の表示
+    # 検索結果一覧
     st.header("検索結果一覧")
+    study_options = [f"{study['nct_id']}: {study['title']}" for study in studies if study['title']]
+    st.session_state.selected_studies = st.multiselect("詳細を確認したい試験を選択してください:", study_options, key='study_selector', default=st.session_state.selected_studies)
 
-    # 試験のタイトルとNCT IDを表示
-    study_options = [f"{study['nct_id']}: {study['title']}" for study in st.session_state.structured_studies if study['title']]
-    st.session_state.selected_studies = st.multiselect("詳細を確認したい試験を選択してください:", study_options, key='study_selector')
-
-    # 選択された試験の詳細表示
     for study_option in st.session_state.selected_studies:
         nct_id = study_option.split(":")[0]
-        study = next((s for s in st.session_state.structured_studies if s['nct_id'] == nct_id), None)
+        study = next((s for s in studies if s['nct_id'] == nct_id), None)
         if study:
             st.subheader(f"{study['nct_id']}: {study['title']}")
             st.write(f"**ステータス:** {study['status']}")
@@ -407,108 +189,44 @@ if submit_button:
             st.write(', '.join(study['outcomes']['secondary']))
             st.write("---")
 
-    # 選択された試験の横断的な要約
-    if st.session_state.selected_studies:
-        selected_study_data = [study for study in st.session_state.structured_studies if f"{study['nct_id']}: {study['title']}" in st.session_state.selected_studies]
-        summary_prompt = f"""
-以下の臨床試験の情報を基に、共通点や相違点を要約してください。
-
-"""
-        for study in selected_study_data:
-            summary_prompt += f"""
-### 試験ID: {study['nct_id']}
-- タイトル: {study['title']}
-- ステータス: {study['status']}
-- 開始日: {study['start_date']}
-- 終了日: {study['end_date']}
-- 介入内容: {', '.join([intervention['name'] for intervention in study['interventions']])}
-- 主要評価項目: {', '.join(study['outcomes']['primary'])}
-- 副次評価項目: {', '.join(study['outcomes']['secondary'])}
-
-"""
-
-        summary_prompt += "これらの試験の共通点と相違点をまとめてください。回答は日本語でお願いします。"
-
-        with st.spinner("選択された試験の横断的な要約を生成中..."):
-            response = llm.invoke(summary_prompt)
-            cross_study_summary = response.content
-
-        st.subheader("選択された試験の横断的な要約")
-        st.write(cross_study_summary)
-
-    # データの分析と可視化
+def analyze_studies(studies, p):
     st.header("結果の要約と可視化")
 
-    num_studies = len(st.session_state.structured_studies)
+    num_studies = len(studies)
 
     # 介入、適格基準、アウトカムの集計
-    interventions = []
-    eligibility_criteria = []
-    outcomes = {'primary': [], 'secondary': []}
-
-    for study in st.session_state.structured_studies:
-        for intervention in study['interventions']:
-            interventions.append(intervention['name'])
-        eligibility_criteria.append(study['eligibility']['criteria'])
-        outcomes['primary'].extend(study['outcomes']['primary'])
-        outcomes['secondary'].extend(study['outcomes']['secondary'])
+    interventions = [intervention['name'] for study in studies for intervention in study['interventions']]
+    eligibility_criteria = [study['eligibility']['criteria'] for study in studies]
+    primary_outcomes = [outcome for study in studies for outcome in study['outcomes']['primary']]
+    secondary_outcomes = [outcome for study in studies for outcome in study['outcomes']['secondary']]
 
     # 集計
-    intervention_counter = Counter(interventions)
-    eligibility_counter = Counter(eligibility_criteria)
-    primary_outcome_counter = Counter(outcomes['primary'])
-    secondary_outcome_counter = Counter(outcomes['secondary'])
+    top_interventions = get_top_items(interventions)
+    top_eligibility = get_top_items(eligibility_criteria)
+    top_primary_outcomes = get_top_items(primary_outcomes)
+    top_secondary_outcomes = get_top_items(secondary_outcomes)
 
-    # 上位5項目を抽出
-    top_interventions = intervention_counter.most_common(5)
-    top_eligibility = eligibility_counter.most_common(5)
-    top_primary_outcomes = primary_outcome_counter.most_common(5)
-    top_secondary_outcomes = secondary_outcome_counter.most_common(5)
-
-    # LLMを使用して要約文を生成するためのプロンプト
-    summary_prompt = f"""
-    以下は{num_studies}件の臨床試験データの要約です：
-
-    対象患者: {p}
-
-    主な介入 (上位5件):
-    {', '.join([f"{i[0]} ({i[1]}件)" for i in top_interventions])}
-
-    主な適格基準 (上位5件):
-    {', '.join([f"{e[0][:50]}... ({e[1]}件)" for e in top_eligibility])}
-
-    主要評価項目 (上位5件):
-    {', '.join([f"{o[0]} ({o[1]}件)" for o in top_primary_outcomes])}
-
-    副次評価項目 (上位5件):
-    {', '.join([f"{o[0]} ({o[1]}件)" for o in top_secondary_outcomes])}
-
-    これらの情報を基に、臨床試験の全体的な傾向を簡潔に要約してください。
-    特に、どのような患者を対象に、どのような介入を行い、主にどのような結果を評価しているかをまとめてください。
-    回答は日本語で、3-4文程度でお願いします。
-    """
+    # LLMを使用して要約文を生成
+    summary_prompt = SUMMARY_PROMPT_TEMPLATE.format(
+        num_studies=num_studies,
+        p=p,
+        interventions=', '.join([f"{i[0]} ({i[1]}件)" for i in top_interventions]),
+        eligibility=', '.join([f"{e[0][:50]}... ({e[1]}件)" for e in top_eligibility]),
+        primary_outcomes=', '.join([f"{o[0]} ({o[1]}件)" for o in top_primary_outcomes]),
+        secondary_outcomes=', '.join([f"{o[0]} ({o[1]}件)" for o in top_secondary_outcomes])
+    )
 
     with st.spinner("結果を要約中..."):
         response = llm.invoke(summary_prompt)
         summary = response.content
 
-    # 評価対象医薬品の集計用データフレーム作成
-    drug_df = pd.DataFrame(top_interventions, columns=['Drug', 'Count']).sort_values('Count', ascending=False)
-
-    # 主要評価項目の集計用データフレーム作成
-    outcome_df = pd.DataFrame(top_primary_outcomes, columns=['Outcome', 'Count']).sort_values('Count', ascending=False)
-
     # 可視化
     st.subheader("評価対象医薬品の分布")
-    fig1, ax1 = plt.subplots()
-    ax1.pie(drug_df['Count'], labels=drug_df['Drug'], autopct='%1.1f%%')
-    ax1.axis('equal')
+    fig1, drug_df = Visualizer.plot_drug_distribution(top_interventions)
     st.pyplot(fig1)
 
     st.subheader("主要評価項目の分布")
-    fig2, ax2 = plt.subplots()
-    ax2.pie(outcome_df['Count'], labels=outcome_df['Outcome'], autopct='%1.1f%%')
-    ax2.axis('equal')
+    fig2, outcome_df = Visualizer.plot_outcome_distribution(top_primary_outcomes)
     st.pyplot(fig2)
 
     # 結果の出力
@@ -521,57 +239,36 @@ if submit_button:
     st.subheader("Top 5 Primary Outcomes:")
     st.table(outcome_df)
 
-    # 先行研究の横断的分析
-    st.header("先行研究の横断的分析")
+    # 選択された試験の横断的な要約
+    if st.session_state.selected_studies:
+        selected_study_data = [study for study in studies if f"{study['nct_id']}: {study['title']}" in st.session_state.selected_studies]
+        cross_study_summaries = [f"""
+        ### 試験ID: {study['nct_id']}
+        - タイトル: {study['title']}
+        - ステータス: {study['status']}
+        - 開始日: {study['start_date']}
+        - 終了日: {study['end_date']}
+        - 介入内容: {', '.join([intervention['name'] for intervention in study['interventions']])}
+        - 主要評価項目: {', '.join(study['outcomes']['primary'])}
+        - 副次評価項目: {', '.join(study['outcomes']['secondary'])}
+        """ for study in selected_study_data]
 
-    if st.session_state.structured_studies:
-        study_summaries = []
-        for study in st.session_state.structured_studies[:5]:  # 最初の5つの研究を分析
-            summary = f"""
-            NCT ID: {study['nct_id']}
-            タイトル: {study['title']}
-            状態: {study['status']}
-            介入: {', '.join([i['name'] for i in study['interventions']])}
-            主要評価項目: {', '.join(study['outcomes']['primary'])}
-            """
-            study_summaries.append(summary)
+        cross_study_prompt = CROSS_STUDY_PROMPT.format(summaries=' '.join(cross_study_summaries))
 
-        cross_study_prompt = f"""
-        以下の臨床試験の要約を分析し、以下の点について横断的な分析を行ってください：
-        1. 共通の介入方法
-        2. 主要評価項目の傾向
-        3. 試験デザインの特徴
-        4. 対象患者の特徴
-
-        {' '.join(study_summaries)}
-
-        回答は箇条書きで、日本語でお願いします。
-        """
-
-        with st.spinner("先行研究の横断的分析を生成中..."):
+        with st.spinner("選択された試験の横断的な要約を生成中..."):
             response = llm.invoke(cross_study_prompt)
-            cross_study_analysis = response.content
+            cross_study_summary = response.content
 
-        st.write(cross_study_analysis)
+        st.subheader("選択された試験の横断的な要約")
+        st.write(cross_study_summary)
 
     # Inclusion/Exclusion基準の詳細分析
     st.header("適格基準の詳細分析")
 
-    if st.session_state.structured_studies:
-        eligibility_criteria = [study['eligibility']['criteria'] for study in st.session_state.structured_studies]
+    if studies:
+        eligibility_criteria = [study['eligibility']['criteria'] for study in studies]
 
-        criteria_prompt = f"""
-        以下の適格基準を分析し、以下の点について要約してください：
-        1. 最も一般的な包含基準
-        2. 最も一般的な除外基準
-        3. 特徴的または珍しい基準
-        4. 年齢や性別に関する傾向
-
-        適格基準:
-        {' '.join(eligibility_criteria)}
-
-        回答は箇条書きで、日本語でお願いします。
-        """
+        criteria_prompt = CRITERIA_PROMPT.format(criteria=' '.join(eligibility_criteria))
 
         with st.spinner("適格基準の分析を生成中..."):
             response = llm.invoke(criteria_prompt)
@@ -582,31 +279,17 @@ if submit_button:
     # 関連文献の要約
     st.header("関連文献の要約")
 
-    if st.session_state.structured_studies:
-        publications = []
-        for study in st.session_state.structured_studies:
-            publications.extend(study['publications'])
+    if studies:
+        publications = [pub for study in studies for pub in study['publications']]
 
         if publications:
-            publication_summaries = []
-            for pub in publications[:5]:  # 最初の5つの文献を要約
-                summary = f"""
-                タイトル: {pub['title']}
-                引用: {pub['citation']}
-                PMID: {pub['pmid']}
-                """
-                publication_summaries.append(summary)
+            publication_summaries = [f"""
+            タイトル: {pub['title']}
+            引用: {pub['citation']}
+            PMID: {pub['pmid']}
+            """ for pub in publications[:5]]
 
-            publication_prompt = f"""
-            以下の臨床試験関連文献を要約し、以下の点について分析してください：
-            1. 主な研究テーマ
-            2. 重要な結果や発見
-            3. 臨床的意義
-
-            {' '.join(publication_summaries)}
-
-            回答は箇条書きで、日本語でお願いします。
-            """
+            publication_prompt = PUBLICATION_PROMPT.format(summaries=' '.join(publication_summaries))
 
             with st.spinner("関連文献の要約を生成中..."):
                 response = llm.invoke(publication_prompt)
@@ -619,12 +302,12 @@ if submit_button:
     # 複数の試験の横断的な比較分析
     st.header("複数の試験の横断的な比較分析")
 
-    if len(st.session_state.structured_studies) >= 2:
+    if len(studies) >= 2:
         selected_studies = st.multiselect(
             "比較分析する試験を2つ以上選択してください：",
-            options=[f"{study['nct_id']}: {study['title']}" for study in st.session_state.structured_studies],
-            default=[f"{st.session_state.structured_studies[0]['nct_id']}: {st.session_state.structured_studies[0]['title']}",
-                    f"{st.session_state.structured_studies[1]['nct_id']}: {st.session_state.structured_studies[1]['title']}"],
+            options=[f"{study['nct_id']}: {study['title']}" for study in studies],
+            default=[f"{studies[0]['nct_id']}: {studies[0]['title']}",
+                    f"{studies[1]['nct_id']}: {studies[1]['title']}"],
             key='comparison_selector'
         )
 
@@ -632,7 +315,7 @@ if submit_button:
             comparison_data = []
             for selected in selected_studies:
                 nct_id = selected.split(":")[0].strip()
-                study = next((s for s in st.session_state.structured_studies if s['nct_id'] == nct_id), None)
+                study = next((s for s in studies if s['nct_id'] == nct_id), None)
                 if study:
                     comparison_data.append(f"""
                     NCT ID: {study['nct_id']}
@@ -644,18 +327,7 @@ if submit_button:
                     適格基準: {study['eligibility']['criteria']}
                     """)
 
-            comparison_prompt = f"""
-            以下の臨床試験を比較分析し、以下の点について要約してください：
-            1. 試験デザインの類似点と相違点
-            2. 介入方法の比較
-            3. 評価項目の違い
-            4. 対象患者の選択基準の違い
-            5. 各試験の強みと弱み
-
-            {' '.join(comparison_data)}
-
-            回答は箇条書きで、日本語でお願いします。
-            """
+            comparison_prompt = COMPARISON_PROMPT.format(comparison_data=' '.join(comparison_data))
 
             with st.spinner("試験の比較分析を生成中..."):
                 response = llm.invoke(comparison_prompt)
@@ -665,10 +337,8 @@ if submit_button:
         else:
             st.write("比較するには2つ以上の試験を選択してください。")
 
-# プロトコルドラフト生成支援
-st.header("プロトコルドラフト生成支援")
-
-if st.session_state.structured_studies:
+def generate_protocol_draft(studies):
+    st.header("プロトコルドラフト生成支援")
     st.write("収集した情報を基に、新しい臨床試験のプロトコルドラフトを生成します。")
     
     target_condition = st.text_input("対象疾患：", key='target_condition')
@@ -676,26 +346,19 @@ if st.session_state.structured_studies:
     primary_outcome = st.text_input("主要評価項目：", key='primary_outcome')
 
     if st.button("プロトコルドラフトを生成", key='generate_protocol'):
-        protocol_prompt = f"""
-        以下の情報を基に、新しい臨床試験のプロトコルドラフトを生成してください：
+        existing_studies = [
+            f"NCT ID: {s['nct_id']}, タイトル: {s['title']}, 状態: {s['status']}, "
+            f"介入: {', '.join([i['name'] for i in s['interventions']])}, "
+            f"主要評価項目: {', '.join(s['outcomes']['primary'])}"
+            for s in studies[:5]
+        ]
 
-        対象疾患: {target_condition}
-        介入方法: {intervention}
-        主要評価項目: {primary_outcome}
-
-        既存の臨床試験データ:
-        {' '.join([f"NCT ID: {s['nct_id']}, タイトル: {s['title']}, 状態: {s['status']}, 介入: {', '.join([i['name'] for i in s['interventions']])}, 主要評価項目: {', '.join(s['outcomes']['primary'])}" for s in st.session_state.structured_studies[:5]])}
-
-        プロトコルドラフトには以下の項目を含めてください：
-        1. 試験の背景と目的
-        2. 試験デザイン
-        3. 対象患者の選択基準（包含基準と除外基準）
-        4. 介入方法の詳細
-        5. 評価項目（主要評価項目と副次評価項目）
-        6. 統計学的考慮事項
-
-        回答は日本語で、各項目を簡潔にまとめてください。
-        """
+        protocol_prompt = PROTOCOL_PROMPT.format(
+            target_condition=target_condition,
+            intervention=intervention,
+            primary_outcome=primary_outcome,
+            existing_studies=' '.join(existing_studies)
+        )
 
         with st.spinner("プロトコルドラフトを生成中..."):
             response = llm.invoke(protocol_prompt)
@@ -704,8 +367,5 @@ if st.session_state.structured_studies:
         st.subheader("生成されたプロトコルドラフト")
         st.write(protocol_draft)
 
-# セッション状態の維持
-if 'structured_studies' in st.session_state:
-    st.session_state.structured_studies = st.session_state.structured_studies
-if 'selected_studies' in st.session_state:
-    st.session_state.selected_studies = st.session_state.selected_studies
+if __name__ == "__main__":
+    main()
