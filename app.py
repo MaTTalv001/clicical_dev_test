@@ -38,6 +38,15 @@ if 'search_performed' not in st.session_state:
     st.session_state.search_performed = False
 if 'total_count' not in st.session_state:
     st.session_state.total_count = 0
+# 新しいステップの完了状態
+if 'summary_generated' not in st.session_state:
+    st.session_state.summary_generated = False
+if 'criteria_analyzed' not in st.session_state:
+    st.session_state.criteria_analyzed = False
+if 'publications_summarized' not in st.session_state:
+    st.session_state.publications_summarized = False
+if 'comparison_analyzed' not in st.session_state:
+    st.session_state.comparison_analyzed = False
 
 @st.cache_data
 def cached_fetch_and_structure_studies(query):
@@ -51,20 +60,42 @@ def main():
     # PICO入力フォーム
     submitted, p, i, c, o, additional = input_pico_form()
     
-    if submitted or st.session_state.search_performed:
-        if submitted:
-            # 新しい検索が行われた場合
-            query = generate_query(p, i, c, o, additional)
-            if query:
-                st.session_state.structured_studies, st.session_state.total_count = cached_fetch_and_structure_studies(query)
-                st.session_state.search_performed = True
+    if submitted:
+        query = generate_query(p, i, c, o, additional)
+        if query:
+            st.session_state.structured_studies, st.session_state.total_count = cached_fetch_and_structure_studies(query)
+            st.session_state.search_performed = True
         
-        # 結果の表示と分析
+    if st.session_state.search_performed:
+        # 結果の表示
         display_results(st.session_state.structured_studies, st.session_state.total_count)
-        analyze_studies(st.session_state.structured_studies, p)
+        
+        # 結果の要約と可視化
+        if st.button("結果の要約と可視化を実行"):
+            analyze_studies(st.session_state.structured_studies, p)
+            st.session_state.summary_generated = True
+        
+        # 適格基準の詳細分析
+        if st.session_state.summary_generated:
+            if st.button("適格基準の詳細分析を実行"):
+                analyze_eligibility_criteria(st.session_state.structured_studies)
+                st.session_state.criteria_analyzed = True
+        
+        # 関連文献の要約
+        if st.session_state.criteria_analyzed:
+            if st.button("関連文献の要約を実行"):
+                summarize_publications(st.session_state.structured_studies)
+                st.session_state.publications_summarized = True
+        
+        # 複数の試験の横断的な比較分析
+        if st.session_state.publications_summarized:
+            if st.button("試験の比較分析を実行"):
+                compare_studies(st.session_state.structured_studies)
+                st.session_state.comparison_analyzed = True
         
         # プロトコルドラフト生成支援
-        generate_protocol_draft(st.session_state.structured_studies)
+        if st.session_state.comparison_analyzed:
+            generate_protocol_draft(st.session_state.structured_studies)
 
 def input_pico_form():
     with st.form(key='pico_form'):
@@ -138,13 +169,6 @@ def create_clinicaltrials_gov_url(query):
     
     encoded_params = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
     return base_url + encoded_params
-
-def fetch_and_structure_studies(query):
-    with st.spinner("臨床試験データを取得中..."):
-        structured_studies, total_count = api_handler.fetch_and_structure_studies(query)
-    
-    st.session_state.structured_studies = structured_studies
-    return structured_studies, total_count
 
 def display_results(studies, total_count):
     st.subheader(f"Total studies found: {total_count}")
@@ -262,7 +286,7 @@ def analyze_studies(studies, p):
         st.subheader("選択された試験の横断的な要約")
         st.write(cross_study_summary)
 
-    # Inclusion/Exclusion基準の詳細分析
+def analyze_eligibility_criteria(studies):
     st.header("適格基準の詳細分析")
 
     if studies:
@@ -276,7 +300,7 @@ def analyze_studies(studies, p):
 
         st.write(criteria_analysis)
 
-    # 関連文献の要約
+def summarize_publications(studies):
     st.header("関連文献の要約")
 
     if studies:
@@ -299,7 +323,7 @@ def analyze_studies(studies, p):
         else:
             st.write("関連文献が見つかりませんでした。")
 
-    # 複数の試験の横断的な比較分析
+def compare_studies(studies):
     st.header("複数の試験の横断的な比較分析")
 
     if len(studies) >= 2:
