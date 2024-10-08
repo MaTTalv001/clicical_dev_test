@@ -53,9 +53,10 @@ def cached_fetch_and_structure_studies(query):
     return api_handler.fetch_and_structure_studies(query)
 
 def main():
-    st.title("Clinical Trials Search and Analysis App")
+    st.title("Clinical Trials Search and Analysis App α版")
     
     st.write("このアプリでは、PICO形式で入力された情報に基づいてclinicaltrials.govから臨床試験を検索し、結果を要約・可視化します。")
+    st.write("エラーが出る場合は年度範囲など条件指定を狭めてみてください")
 
     # PICO入力フォーム
     submitted, p, i, c, o, additional = input_pico_form()
@@ -103,7 +104,7 @@ def input_pico_form():
         i = st.text_input("Intervention (介入):", key='i')
         c = st.text_input("Comparison (比較対象):", key='c')
         o = st.text_input("Outcome (結果):", key='o')
-        additional = st.text_input("Additional conditions (追加条件):", key='additional')
+        additional = st.text_input("Additional conditions (追加条件 検索年の範囲など):", key='additional')
         submitted = st.form_submit_button(label='検索')
     return submitted, p, i, c, o, additional
 
