@@ -1,3 +1,16 @@
+# utils/prompts.py
+"""
+このモジュールは、臨床試験データの検索と分析に使用される各種プロンプトテンプレートを定義します。
+APIクエリの生成から、試験データの分析、要約生成まで、様々な目的に特化したプロンプトを提供します。
+
+主なコンポーネント：
+- API仕様のドキュメント
+- システムプロンプト
+- 各種分析用プロンプトテンプレート
+"""
+
+# APIの仕様を定義するドキュメント
+# クエリパラメータ、フィルター、ソートオプションなどの詳細な説明を含む
 API_DOCUMENT = '''
 ### Query Parameters:
 - **query.cond**: "Conditions or disease" query in Essie expression syntax. Searches in the `ConditionSearch` area.
@@ -82,6 +95,8 @@ filter.advanced: AREA[LastUpdatePostDate]RANGE[2023-01-15,MAX]
 The Essie expression syntax allows for advanced querying and filtering within specified areas.
 '''
 
+# システムプロンプト：APIクエリ生成の基本設定
+# ライフサイエンス分野の専門家としての役割と出力形式を定義
 SYSTEM_PROMPT = f"""あなたはライフサイエンス分野の学術的なプロフェッショナルです。
 APIリクエストのクエリを<output_example>を参考にJSON形式で出力してください。JSON形式で用いるので、不要な情報は述べないでください。
 <api-document>
@@ -99,45 +114,77 @@ APIリクエストのクエリを<output_example>を参考にJSON形式で出力
 </output_example>
 """
 
-USER_PROMPT_TEMPLATE = """以下のような臨床学的な問いに関連する臨床試験を探しています
-なおそれぞれのタグの意味は以下の通りです
-<patient>にはどのような患者を対象としているかを示しています
-<intervention>にはどのような投与などを治療をした際に、という条件が示されています
-<comparison>には何と比較した結果を調べるか、を示しています
-<outcome>にはどのような結果になるか、を示しています
+# 臨床試験検索用のプロンプトテンプレート
+# PICO形式（Patient, Intervention, Comparison, Outcome）に基づく検索条件の定義
+USER_PROMPT_TEMPLATE = """
+# 臨床試験検索条件
+
+以下の臨床学的な問いに関連する臨床試験を探しています。
+
+## 検索パラメータ
+各XMLタグの意味は以下の通りです：
+
+- `<patient>`: 対象となる患者の特徴
+- `<intervention>`: 実施する治療や投与の内容
+- `<comparison>`: 比較対象
+- `<outcome>`: 評価する結果や指標
+- `<additional_condition>`: その他の条件
+
+## 検索条件
 <patient>{p}</patient>
 <intervention>{i}</intervention>
 <comparison>{c}</comparison>
 <outcome>{o}</outcome>
 <additional_condition>{additional}</additional_condition>
-<tips>
-- 2種の医薬品の結果を比較するような臨床試験を検索する場合は、Interventionの項目に2種の医薬品を入れた条件で検索する必要があります
-- "fields"を利用する必要はありません
-- クエリ文字列でスペースをバックスラッシュなどでエスケープする必要はありません
-</tips>"""
 
-SUMMARY_PROMPT_TEMPLATE = """
-以下は{num_studies}件の臨床試験データの要約です：
-
-対象患者: {p}
-
-主な介入 (上位5件):
-{interventions}
-
-主な適格基準 (上位5件):
-{eligibility}
-
-主要評価項目 (上位5件):
-{primary_outcomes}
-
-副次評価項目 (上位5件):
-{secondary_outcomes}
-
-これらの情報を基に、臨床試験の全体的な傾向を簡潔に要約してください。
-特に、どのような患者を対象に、どのような介入を行い、主にどのような結果を評価しているかをまとめてください。
-回答は日本語で、3-4文程度でお願いします。
+## 重要な注意事項
+* 2種の医薬品の結果を比較するような臨床試験を検索する場合は、`Intervention`に両方の医薬品を含めてください
+* `fields`パラメータは使用しません
+* クエリ文字列内のスペースはエスケープ不要です
 """
 
+
+# 臨床試験データの要約生成用プロンプト
+# 試験の主要な特徴（対象患者、介入、評価項目など）をまとめる
+SUMMARY_PROMPT_TEMPLATE = """
+# 臨床試験データの要約分析
+対象試験数: {num_studies}件
+
+## 試験の基本情報
+### 対象患者
+{p}
+
+### 主な介入方法
+*上位5件*
+{interventions}
+
+### 主な適格基準
+*上位5件*
+{eligibility}
+
+## 評価項目
+### 主要評価項目
+*上位5件*
+{primary_outcomes}
+
+### 副次評価項目
+*上位5件*
+{secondary_outcomes}
+
+## 分析指示
+これらの情報を基に、臨床試験の全体的な傾向について以下の観点から要約を作成してください：
+1. 対象患者の特徴
+2. 実施された介入の特徴
+3. 主な評価指標の傾向
+
+**要件**:
+- 言語: 日本語
+- 長さ: 3-4文程度
+- 焦点: 患者、介入、評価の関連性
+"""
+
+# 複数の臨床試験の横断的分析用プロンプト
+# 共通点や傾向を分析するための指示を含む
 CROSS_STUDY_PROMPT = """
 以下の臨床試験の要約を分析し、以下の点について横断的な分析を行ってください：
 1. 共通の介入方法
@@ -150,6 +197,8 @@ CROSS_STUDY_PROMPT = """
 回答は箇条書きで、日本語でお願いします。
 """
 
+# 適格基準の分析用プロンプト
+# 包含/除外基準の傾向を分析
 CRITERIA_PROMPT = """
 以下の適格基準を分析し、以下の点について要約してください：
 1. 最も一般的な包含基準
@@ -163,6 +212,8 @@ CRITERIA_PROMPT = """
 回答は箇条書きで、日本語でお願いします。
 """
 
+# 関連文献の分析用プロンプト
+# 研究成果や臨床的意義の要約
 PUBLICATION_PROMPT = """
 以下の臨床試験関連文献を要約し、以下の点について分析してください：
 1. 主な研究テーマ
@@ -174,6 +225,8 @@ PUBLICATION_PROMPT = """
 回答は箇条書きで、日本語でお願いします。
 """
 
+# 臨床試験の比較分析用プロンプト
+# 試験間の類似点と相違点を分析
 COMPARISON_PROMPT = """
 以下の臨床試験を比較分析し、以下の点について要約してください：
 1. 試験デザインの類似点と相違点
@@ -187,6 +240,8 @@ COMPARISON_PROMPT = """
 回答は箇条書きで、日本語でお願いします。
 """
 
+# 新規プロトコル生成用プロンプト
+# 既存データを基に新しい試験プロトコルを作成
 PROTOCOL_PROMPT = """
 以下の情報を基に、新しい臨床試験のプロトコルドラフトを生成してください：
 

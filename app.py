@@ -1,3 +1,19 @@
+# app.py
+"""
+このモジュールは、臨床試験データの検索・分析・可視化を行うStreamlitベースのWebアプリケーションです。
+
+主な機能：
+1. PICO形式での臨床試験検索
+2. 検索結果の構造化と可視化
+3. LLMを用いた結果の分析と要約
+4. 試験プロトコルの生成支援
+
+アーキテクチャ：
+- AWSのBedrock（Claude）を利用したLLM処理
+- ClinicalTrials.gov APIを使用したデータ取得
+- Streamlitによるインターフェース提供
+"""
+
 import streamlit as st
 import os
 import json
@@ -5,28 +21,25 @@ import boto3
 import pandas as pd
 import urllib.parse
 from langchain_community.chat_models import BedrockChat
-from prompts import (SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, SUMMARY_PROMPT_TEMPLATE,
-                     CROSS_STUDY_PROMPT, CRITERIA_PROMPT, PUBLICATION_PROMPT,
-                     COMPARISON_PROMPT, PROTOCOL_PROMPT)
-from utils import get_top_items, convert_df_to_csv
-from api_handler import APIHandler
-from visualizer import Visualizer
+from utils.prompts import (
+    SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, SUMMARY_PROMPT_TEMPLATE,
+    CROSS_STUDY_PROMPT, CRITERIA_PROMPT, PUBLICATION_PROMPT,
+    COMPARISON_PROMPT, PROTOCOL_PROMPT)
+from utils.utils import get_top_items, convert_df_to_csv
+from utils.api_handler import APIHandler
+from utils.visualizer import Visualizer
 
-# Streamlitアプリの設定
+# 定数とグローバル設定
 st.set_page_config(page_title="Clinical Trials Search and Analysis App", layout="wide")
 
-# AWSの認証情報を環境変数から取得
+# AWSの認証情報の設定
 os.environ['AWS_ACCESS_KEY_ID'] = st.secrets["AWS_ACCESS_KEY_ID"]
 os.environ['AWS_SECRET_ACCESS_KEY'] = st.secrets["AWS_SECRET_ACCESS_KEY"]
 os.environ['AWS_DEFAULT_REGION'] = st.secrets["AWS_DEFAULT_REGION"]
 
-# Bedrockクライアントの設定
+# 主要コンポーネントの初期化
 bedrock = boto3.client('bedrock-runtime')
-
-# BedrockChatモデルの初期化
 llm = BedrockChat(model_id="anthropic.claude-3-5-sonnet-20240620-v1:0", client=bedrock)
-
-# APIハンドラーの初期化
 api_handler = APIHandler("https://clinicaltrials.gov/api/v2/studies")
 
 # セッション状態の初期化
@@ -50,11 +63,38 @@ if 'comparison_analyzed' not in st.session_state:
 
 @st.cache_data
 def cached_fetch_and_structure_studies(query):
+    """
+    APIからの臨床試験データの取得と構造化を行い、結果をキャッシュする
+
+    @st.cache_dataデコレータにより:
+    - 同じクエリに対する結果がキャッシュされる
+    - アプリの実行効率が向上する
+    - APIへの不要なリクエストを削減できる
+
+    Args:
+        query (dict): 検索クエリパラメータ
+
+    Returns:
+        tuple: (構造化された試験データのリスト, 総試験数)
+    """
     return api_handler.fetch_and_structure_studies(query)
 
 def main():
-    st.title("Clinical Trials Search and Analysis App α版")
-    
+    """
+    APIからの臨床試験データの取得と構造化を行い、結果をキャッシュする
+
+    @st.cache_dataデコレータにより:
+    - 同じクエリに対する結果がキャッシュされる
+    - アプリの実行効率が向上する
+    - APIへの不要なリクエストを削減できる
+
+    Args:
+        query (dict): 検索クエリパラメータ
+
+    Returns:
+        tuple: (構造化された試験データのリスト, 総試験数)
+    """
+    st.title("Clinical Trials Search and Analysis App β版")
     st.write("このアプリでは、PICO形式で入力された情報に基づいてclinicaltrials.govから臨床試験を検索し、結果を要約・可視化します。")
     st.write("エラーが出る場合は年度範囲など条件指定を狭めてみてください")
 
@@ -99,6 +139,7 @@ def main():
             generate_protocol_draft(st.session_state.structured_studies)
 
 def input_pico_form():
+    """PICO形式での入力フォームを提供"""
     with st.form(key='pico_form'):
         p = st.text_input("Patient (対象患者):", key='p')
         i = st.text_input("Intervention (介入):", key='i')
@@ -109,6 +150,7 @@ def input_pico_form():
     return submitted, p, i, c, o, additional
 
 def generate_query(p, i, c, o, additional):
+    """LLMを使用して検索クエリを生成"""
     user_prompt = USER_PROMPT_TEMPLATE.format(p=p, i=i, c=c, o=o, additional=additional)
     
     with st.spinner("クエリを生成中..."):
@@ -133,6 +175,25 @@ def generate_query(p, i, c, o, additional):
         return None
     
 def create_clinicaltrials_gov_url(query):
+    """
+    APIクエリパラメータからClinicalTrials.govの検索URLを生成する
+
+    この関数は、APIの検索クエリをClinicalTrials.govのWeb検索用URLに変換します。
+    これにより、APIでの検索結果をWebブラウザでも確認できるようになります。
+
+    Args:
+        query (dict): APIクエリパラメータを含む辞書
+
+    Returns:
+        str: ClinicalTrials.govの検索URL
+
+    変換される主なパラメータ:
+    - query.cond: 疾患・状態の検索条件
+    - query.intr: 介入方法の検索条件 
+    - filter.overallStatus: 試験の状態（募集中、完了済みなど）
+    - filter.advanced: 日付範囲などの詳細条件
+    - sort: 結果の並び順
+    """
     base_url = "https://clinicaltrials.gov/search?"
     params = {}
     
@@ -172,6 +233,7 @@ def create_clinicaltrials_gov_url(query):
     return base_url + encoded_params
 
 def display_results(studies, total_count):
+    """検索結果の表示と基本的な分析を行う"""
     st.subheader(f"Total studies found: {total_count}")
     st.write(f"Studies retrieved: {len(studies)}")
 
@@ -215,6 +277,12 @@ def display_results(studies, total_count):
             st.write("---")
 
 def analyze_studies(studies, p):
+    """
+    取得した臨床試験データの詳細分析を実行
+    - 介入の分布分析
+    - 評価項目の分析
+    - LLMによる要約生成
+    """
     st.header("結果の要約と可視化")
 
     num_studies = len(studies)
