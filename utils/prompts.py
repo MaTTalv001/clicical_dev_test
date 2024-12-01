@@ -124,10 +124,10 @@ USER_PROMPT_TEMPLATE = """
 ## 検索パラメータ
 各XMLタグの意味は以下の通りです：
 
-- `<patient>`: 対象となる患者の特徴
-- `<intervention>`: 実施する治療や投与の内容
-- `<comparison>`: 比較対象
-- `<outcome>`: 評価する結果や指標
+- `<patient>`: 対象となる患者の特徴(英語)
+- `<intervention>`: 実施する治療や投与の内容(英語)
+- `<comparison>`: 比較対象(英語)
+- `<outcome>`: 評価する結果や指標(英語)
 - `<additional_condition>`: その他の条件（日付範囲は除く）
 
 ## 検索条件
@@ -138,6 +138,7 @@ USER_PROMPT_TEMPLATE = """
 <additional_condition>{additional}</additional_condition>
 
 ## 重要な注意事項
+* ユーザーが日本語で入力しても、あなたは英語でクエリを生成してください
 * 2種の医薬品の結果を比較するような臨床試験を検索する場合は、`Intervention`に両方の医薬品を含めてください
 * `fields`パラメータは使用しません
 * クエリ文字列内のスペースはエスケープ不要です
