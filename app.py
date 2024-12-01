@@ -25,8 +25,9 @@ import urllib.parse
 from langchain_community.chat_models import BedrockChat
 from utils.prompts import (
     SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, SUMMARY_PROMPT_TEMPLATE,
-    CROSS_STUDY_PROMPT, CRITERIA_PROMPT, PUBLICATION_PROMPT,
-    COMPARISON_PROMPT, PROTOCOL_PROMPT)
+    CROSS_STUDY_PROMPT, CRITERIA_PROMPT, COMPREHENSIVE_SUMMARY_PROMPT,
+    PUBLICATION_PROMPT, COMPARISON_PROMPT, PROTOCOL_PROMPT
+    )
 from utils.utils import get_top_items, convert_df_to_csv
 from utils.api_handler import APIHandler
 from utils.visualizer import Visualizer
@@ -125,16 +126,24 @@ def main():
         # 結果の表示
         display_results(st.session_state.structured_studies, st.session_state.total_count)
         
-        # 結果の要約と可視化
-        if st.button("結果の要約と可視化を実行"):
-            analyze_studies(st.session_state.structured_studies, p)
-            st.session_state.summary_generated = True
+        if st.button("検索結果の詳細分析を実行"):
+            with st.spinner("分析を実行中..."):
+                # 基本的な分布の可視化と適格基準の分析
+                Visualizer.visualize_distributions(st.session_state.structured_studies)
+                criteria_analysis = Visualizer.analyze_criteria(st.session_state.structured_studies)
+                # 総合的な要約の生成
+                Visualizer.generate_comprehensive_summary(st.session_state.structured_studies, p, criteria_analysis)
+            st.session_state.analysis_complete = True
+        # # 結果の要約と可視化
+        # if st.button("結果の要約と可視化を実行"):
+        #     analyze_studies(st.session_state.structured_studies, p)
+        #     st.session_state.summary_generated = True
         
-        # 適格基準の詳細分析
-        if st.session_state.summary_generated:
-            if st.button("適格基準の詳細分析を実行"):
-                analyze_eligibility_criteria(st.session_state.structured_studies)
-                st.session_state.criteria_analyzed = True
+        # # 適格基準の詳細分析
+        # if st.session_state.summary_generated:
+        #     if st.button("適格基準の詳細分析を実行"):
+        #         analyze_eligibility_criteria(st.session_state.structured_studies)
+        #         st.session_state.criteria_analyzed = True
         
         # 関連文献の要約
         if st.session_state.criteria_analyzed:
