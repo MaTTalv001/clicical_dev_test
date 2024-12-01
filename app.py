@@ -16,7 +16,9 @@
 
 import streamlit as st
 import os
+import re
 import json
+import datetime
 import boto3
 import pandas as pd
 import urllib.parse
@@ -95,14 +97,26 @@ def main():
         tuple: (構造化された試験データのリスト, 総試験数)
     """
     st.title("Clinical Trials Search and Analysis App β版")
-    st.write("このアプリでは、PICO形式で入力された情報に基づいてclinicaltrials.govから臨床試験を検索し、結果を要約・可視化します。")
-    st.write("エラーが出る場合は年度範囲など条件指定を狭めてみてください")
+    st.markdown("""
+        ### このアプリでできること
+        1. **臨床試験の体系的な検索**: PICO形式での条件指定により、目的に合った臨床試験を検索
+        2. **結果の自動要約**: 検索結果の傾向分析と可視化
+        3. **個別試験の詳細確認**: 興味のある試験について詳しい情報を確認
+
+        #### 使い方
+        1. 下のフォームに検索条件を入力
+        2. 必要に応じて試験期間を指定
+        3. 「検索」ボタンをクリック
+        
+        > 💡 **Tip**: 検索結果が多すぎる場合は、試験期間や条件をより具体的に指定してください
+        """)
 
     # PICO入力フォーム
-    submitted, p, i, c, o, additional = input_pico_form()
+    submitted, p, i, c, o, date_ranges, additional = input_pico_form()
+    
     
     if submitted:
-        query = generate_query(p, i, c, o, additional)
+        query = generate_query(p, i, c, o, date_ranges, additional)
         if query:
             st.session_state.structured_studies, st.session_state.total_count = cached_fetch_and_structure_studies(query)
             st.session_state.search_performed = True
@@ -139,17 +153,62 @@ def main():
             generate_protocol_draft(st.session_state.structured_studies)
 
 def input_pico_form():
-    """PICO形式での入力フォームを提供"""
-    with st.form(key='pico_form'):
-        p = st.text_input("Patient (対象患者):", key='p')
-        i = st.text_input("Intervention (介入):", key='i')
-        c = st.text_input("Comparison (比較対象):", key='c')
-        o = st.text_input("Outcome (結果):", key='o')
-        additional = st.text_input("Additional conditions (追加条件 検索年の範囲など):", key='additional')
-        submitted = st.form_submit_button(label='検索')
-    return submitted, p, i, c, o, additional
+   """PICO形式での入力フォームを提供"""
+   with st.form(key='pico_form'):
+       p = st.text_input("Patient (対象患者):", key='p')
+       i = st.text_input("Intervention (介入):", key='i')
+       c = st.text_input("Comparison (比較対象):", key='c')
+       o = st.text_input("Outcome (結果):", key='o')
+       
+       # 試験開始期間
+       st.write("試験開始期間")
+       start_cols = st.columns(2)
+       with start_cols[0]:
+           start_date_min = st.date_input(
+               "開始日（From）",
+               value=datetime.date(2010, 1, 1),
+               min_value=datetime.date(2000, 1, 1),
+               max_value=datetime.date.today(),
+               key='start_date_min'
+           )
+       with start_cols[1]:
+           start_date_max = st.date_input(
+               "開始日（To）",
+               value=datetime.date(2018, 12, 31),
+               min_value=datetime.date(2000, 1, 1),
+               max_value=datetime.date.today(),
+               key='start_date_max'
+           )
+       
+       # 試験完了期間
+       st.write("試験完了期間")
+       end_cols = st.columns(2)
+       with end_cols[0]:
+           end_date_min = st.date_input(
+               "完了日（From）",
+               value=datetime.date(2010, 1, 1),
+               min_value=datetime.date(2000, 1, 1),
+               max_value=datetime.date.today(),
+               key='end_date_min'
+           )
+       with end_cols[1]:
+           end_date_max = st.date_input(
+               "完了日（To）",
+               value=datetime.date(2018, 12, 31),
+               min_value=datetime.date(2000, 1, 1),
+               max_value=datetime.date.today(),
+               key='end_date_max'
+           )
 
-def generate_query(p, i, c, o, additional):
+       additional = st.text_input("Additional conditions (その他の追加条件):", key='additional')
+       submitted = st.form_submit_button(label='検索')
+       
+   return submitted, p, i, c, o, {
+       'start_date_range': (start_date_min, start_date_max),
+       'end_date_range': (end_date_min, end_date_max)
+   }, additional
+
+def generate_query(p, i, c, o, date_ranges, additional):
     """LLMを使用して検索クエリを生成"""
     user_prompt = USER_PROMPT_TEMPLATE.format(p=p, i=i, c=c, o=o, additional=additional)
     
@@ -161,6 +220,22 @@ def generate_query(p, i, c, o, additional):
 
     try:
         query = json.loads(response.content)
+        
+        # 日付範囲を追加
+        start_min, start_max = date_ranges['start_date_range']
+        end_min, end_max = date_ranges['end_date_range']
+        
+        # 日付フィルターの構築
+        date_filters = []
+        if start_min and start_max:  # 開始日範囲が指定されている場合
+            date_filters.append(f"AREA[StartDate]RANGE[{start_min.strftime('%Y-%m-%d')},{start_max.strftime('%Y-%m-%d')}]")
+        if end_min and end_max:      # 完了日範囲が指定されている場合
+            date_filters.append(f"AREA[CompletionDate]RANGE[{end_min.strftime('%Y-%m-%d')},{end_max.strftime('%Y-%m-%d')}]")
+        
+        # 日付フィルターがある場合はadvancedフィルターに追加
+        if date_filters:
+            query['filter.advanced'] = " AND ".join(date_filters)
+
         st.success("クエリのパースに成功しました。")
         
         # clinicaltrials.govのURLを生成
@@ -178,51 +253,61 @@ def create_clinicaltrials_gov_url(query):
     """
     APIクエリパラメータからClinicalTrials.govの検索URLを生成する
 
-    この関数は、APIの検索クエリをClinicalTrials.govのWeb検索用URLに変換します。
-    これにより、APIでの検索結果をWebブラウザでも確認できるようになります。
-
     Args:
         query (dict): APIクエリパラメータを含む辞書
 
     Returns:
         str: ClinicalTrials.govの検索URL
-
-    変換される主なパラメータ:
-    - query.cond: 疾患・状態の検索条件
-    - query.intr: 介入方法の検索条件 
-    - filter.overallStatus: 試験の状態（募集中、完了済みなど）
-    - filter.advanced: 日付範囲などの詳細条件
-    - sort: 結果の並び順
     """
     base_url = "https://clinicaltrials.gov/search?"
-    params = {}
+    params = {'viewType': 'Table'}  # デフォルトでテーブル表示
     
+    # 疾患・状態の検索条件
     if 'query.cond' in query:
         params['cond'] = query['query.cond']
     
+    # 介入方法の検索条件
     if 'query.intr' in query:
         params['intr'] = query['query.intr']
     
-    if 'filter.overallStatus' in query:
-        status_map = {
-            'COMPLETED': 'e',
-            'RECRUITING': 'r',
-            'NOT_YET_RECRUITING': 'n',
-            'ACTIVE_NOT_RECRUITING': 'a',
-            'TERMINATED': 't',
-            'WITHDRAWN': 'w',
-            'SUSPENDED': 's'
-        }
-        params['recrs'] = status_map.get(query['filter.overallStatus'], '')
-    
+    # 日付範囲の処理
     if 'filter.advanced' in query:
         advanced = query['filter.advanced']
-        if 'AREA[StartDate]RANGE' in advanced:
-            date_range = advanced.split('RANGE')[1].strip('[]').split(',')
-            start_date = date_range[0].strip()
-            end_date = date_range[1].strip()
+        
+        # 開始日の範囲を抽出
+        start_date_match = re.search(r'AREA\[StartDate\]RANGE\[(.*?),(.*?)\]', advanced)
+        if start_date_match:
+            start_date = start_date_match.group(1).strip()
+            end_date = start_date_match.group(2).strip()
             params['start'] = f"{start_date}_{end_date}"
+        
+        # 完了日の範囲を抽出
+        comp_date_match = re.search(r'AREA\[CompletionDate\]RANGE\[(.*?),(.*?)\]', advanced)
+        if comp_date_match:
+            start_date = comp_date_match.group(1).strip()
+            end_date = comp_date_match.group(2).strip()
+            params['studyComp'] = f"{start_date}_{end_date}"
     
+    # 試験の状態
+    if 'filter.overallStatus' in query:
+        status = query['filter.overallStatus']
+        if isinstance(status, list):
+            status = status[0]  # リストの場合は最初の要素を使用
+        
+        status_map = {
+            'COMPLETED': 'com',
+            'RECRUITING': 'rec',
+            'NOT_YET_RECRUITING': 'nyr',
+            'ACTIVE_NOT_RECRUITING': 'anr',
+            'TERMINATED': 'term',
+            'WITHDRAWN': 'wth',
+            'SUSPENDED': 'sus'
+        }
+        
+        if status in status_map:
+            params['aggFilters'] = f"status:{status_map[status]}"
+    
+    # ソート順
     if 'sort' in query:
         sort_options = query['sort']
         if isinstance(sort_options, list) and sort_options:
@@ -234,6 +319,7 @@ def create_clinicaltrials_gov_url(query):
 
 def display_results(studies, total_count):
     """検索結果の表示と基本的な分析を行う"""
+    st.divider()
     st.subheader(f"Total studies found: {total_count}")
     st.write(f"Studies retrieved: {len(studies)}")
 
@@ -241,20 +327,20 @@ def display_results(studies, total_count):
     df = pd.DataFrame(studies)
 
     # データフレームの表示
-    st.subheader("構造化データの表示")
+    st.subheader("取得データの一覧")
     st.dataframe(df)
 
     # データのダウンロード
     csv = convert_df_to_csv(df)
     st.download_button(
-        label="CSVとしてダウンロード",
+        label="Download as CSV",
         data=csv,
         file_name='structured_clinical_trials.csv',
         mime='text/csv',
     )
 
     # 検索結果一覧
-    st.header("検索結果一覧")
+    st.subheader("個別試験の要約(Optional)")
     study_options = [f"{study['nct_id']}: {study['title']}" for study in studies if study['title']]
     st.session_state.selected_studies = st.multiselect("詳細を確認したい試験を選択してください:", study_options, key='study_selector', default=st.session_state.selected_studies)
 
@@ -275,6 +361,8 @@ def display_results(studies, total_count):
             st.write("**副次評価項目:**")
             st.write(', '.join(study['outcomes']['secondary']))
             st.write("---")
+    st.divider()
+    st.subheader("取得データの要約")
 
 def analyze_studies(studies, p):
     """

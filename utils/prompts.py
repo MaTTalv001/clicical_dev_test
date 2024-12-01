@@ -128,7 +128,7 @@ USER_PROMPT_TEMPLATE = """
 - `<intervention>`: 実施する治療や投与の内容
 - `<comparison>`: 比較対象
 - `<outcome>`: 評価する結果や指標
-- `<additional_condition>`: その他の条件
+- `<additional_condition>`: その他の条件（日付範囲は除く）
 
 ## 検索条件
 <patient>{p}</patient>
@@ -141,6 +141,7 @@ USER_PROMPT_TEMPLATE = """
 * 2種の医薬品の結果を比較するような臨床試験を検索する場合は、`Intervention`に両方の医薬品を含めてください
 * `fields`パラメータは使用しません
 * クエリ文字列内のスペースはエスケープ不要です
+* 日付範囲は別途システムで制御するため、ここでは指定しないでください
 """
 
 

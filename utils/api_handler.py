@@ -21,6 +21,9 @@ fetch_and_structure_studies関数は、上記の2つの機能を組み合わせ�
 """
 
 import requests
+import re
+import urllib.parse
+import streamlit as st
 from utils.utils import structure_clinical_trial
 
 class APIHandler:
@@ -34,15 +37,20 @@ class APIHandler:
     def fetch_studies(self, params):
         """
         APIから臨床試験データを取得する
-        
-        Args:
-            params (dict): APIリクエストのパラメータ
-        
-        Returns:
-            tuple: (取得した試験データのリスト, 総件数)
         """
+        # filter.overallStatusがリストの場合、カンマ区切りの文字列に変換
+        if 'filter.overallStatus' in params:
+            if isinstance(params['filter.overallStatus'], list):
+                params['filter.overallStatus'] = ','.join(params['filter.overallStatus'])
+            elif isinstance(params['filter.overallStatus'], str):
+                # 既に文字列の場合はそのまま
+                pass
+
         all_studies = []
         total_count = 0
+
+        # デバッグ
+        st.write(params)
 
         while True:
             response = requests.get(self.api_url, params=params)
@@ -61,7 +69,7 @@ class APIHandler:
             if 'nextPageToken' in data:
                 params['pageToken'] = data['nextPageToken']
             else:
-                break  # 最後のページに到達
+                break
 
         return all_studies, total_count
 

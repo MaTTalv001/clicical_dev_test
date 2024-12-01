@@ -32,6 +32,7 @@ convert_df_to_csvは、pandasのDataFrameをUTF-8エンコードのCSV形式に
 変換します。データのエクスポートに使用されます。
 """
 import re
+import urllib.parse
 from datetime import datetime
 from collections import Counter
 
