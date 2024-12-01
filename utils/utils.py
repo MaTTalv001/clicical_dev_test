@@ -90,6 +90,9 @@ def structure_clinical_trial(study):
         print(f"Warning: Unexpected data structure in study")
         return None
 
+    # 適格基準モジュールの取得
+    eligibility_module = protocol_section.get('eligibilityModule', {})
+
     structured_data = {
         "nct_id": protocol_section.get('identificationModule', {}).get('nctId'),
         "title": protocol_section.get('identificationModule', {}).get('officialTitle'),
@@ -98,7 +101,25 @@ def structure_clinical_trial(study):
         "status": protocol_section.get('statusModule', {}).get('overallStatus'),
         "start_date": parse_date(protocol_section.get('statusModule', {}).get('startDateStruct', {}).get('date')),
         "end_date": parse_date(protocol_section.get('statusModule', {}).get('completionDateStruct', {}).get('date')),
-        "eligibility": {},
+
+        # 従来のeligibilityを保持
+        "eligibility": {
+            "criteria": clean_html(eligibility_module.get('eligibilityCriteria', '')),
+            "healthy_volunteers": eligibility_module.get('healthyVolunteers'),
+            "sex": eligibility_module.get('sex'),
+            "gender_based": eligibility_module.get('genderBased'),
+            "minimum_age": eligibility_module.get('minimumAge'),
+            "maximum_age": eligibility_module.get('maximumAge'),
+        },
+
+        # 適格基準関連のフィールドを個別のカラムとして定義
+        "inclusion_criteria": parse_criteria(eligibility_module.get('eligibilityCriteria', ''), 'Inclusion'),
+        "exclusion_criteria": parse_criteria(eligibility_module.get('eligibilityCriteria', ''), 'Exclusion'),
+        "healthy_volunteers_eligible": eligibility_module.get('healthyVolunteers'),
+        "sex_eligible": eligibility_module.get('sex'),
+        "minimum_age": eligibility_module.get('minimumAge'),
+        "maximum_age": eligibility_module.get('maximumAge'),
+
         "interventions": [
             {
                 "type": intervention.get('type'),
@@ -132,17 +153,6 @@ def structure_clinical_trial(study):
         ]
     }
 
-    # 適格基準の処理
-    eligibility_module = protocol_section.get('eligibilityModule', {})
-    structured_data["eligibility"] = {
-        "criteria": clean_html(eligibility_module.get('eligibilityCriteria', '')),
-        "healthy_volunteers": eligibility_module.get('healthyVolunteers'),
-        "sex": eligibility_module.get('sex'),
-        "gender_based": eligibility_module.get('genderBased'),
-        "minimum_age": eligibility_module.get('minimumAge'),
-        "maximum_age": eligibility_module.get('maximumAge'),
-    }
-
     # 場所情報の処理
     locations_module = protocol_section.get('contactsLocationsModule', {})
     locations = locations_module.get('locations', [])
@@ -160,6 +170,36 @@ def structure_clinical_trial(study):
         structured_data["locations"] = [{"facility": locations, "city": None, "country": None}]
 
     return structured_data
+
+def parse_criteria(criteria_text, criteria_type):
+    """
+    選択・除外基準のテキストを解析する
+    
+    Args:
+        criteria_text (str): 生の基準テキスト
+        criteria_type (str): 'Inclusion' または 'Exclusion'
+    
+    Returns:
+        str: 整形された基準テキスト
+    """
+    if not criteria_text:
+        return None
+        
+    # 基準テキストを行に分割
+    lines = criteria_text.split('\n')
+    criteria_section = []
+    in_target_section = False
+    
+    for line in lines:
+        if f"{criteria_type} Criteria:" in line:
+            in_target_section = True
+            continue
+        elif "Criteria:" in line and criteria_type not in line:
+            in_target_section = False
+        elif in_target_section and line.strip():
+            criteria_section.append(line.strip())
+    
+    return '\n'.join(criteria_section) if criteria_section else None
 
 def get_top_items(items, n=5):
     """

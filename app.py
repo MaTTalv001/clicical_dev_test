@@ -25,6 +25,7 @@ from utils.state_manager import initialize_session_state
 from utils.form_handler import render_pico_form
 from utils.query_generator import QueryGenerator
 from utils.result_analyzer import ResultAnalyzer
+from utils.visualizer import Visualizer
 from utils.protocol_generator import ProtocolGenerator
 from utils.api_handler import APIHandler
 from utils.prompts import (
@@ -32,7 +33,8 @@ from utils.prompts import (
     USER_PROMPT_TEMPLATE,
     SUMMARY_PROMPT_TEMPLATE,
     CRITERIA_PROMPT,
-    PROTOCOL_PROMPT
+    PROTOCOL_PROMPT,
+    COMPREHENSIVE_SUMMARY_PROMPT
 )
 from utils.utils import get_top_items, convert_df_to_csv
 
@@ -104,33 +106,39 @@ def handle_search_results(llm, studies, total_count, p):
         convert_df_to_csv
     )
     
+    # # 詳細分析ボタン
+    # if st.button("検索結果の詳細分析を実行"):
+    #     with st.spinner("分析を実行中..."):
+    #         ResultAnalyzer.analyze_studies(
+    #             studies,
+    #             p,
+    #             llm,
+    #             SUMMARY_PROMPT_TEMPLATE,
+    #             get_top_items
+    #         )
+    #         st.session_state.analysis_complete = True
+    
     # 詳細分析ボタン
     if st.button("検索結果の詳細分析を実行"):
         with st.spinner("分析を実行中..."):
-            ResultAnalyzer.analyze_studies(
-                studies,
-                p,
-                llm,
-                SUMMARY_PROMPT_TEMPLATE,
-                get_top_items
+            # 可視化
+            Visualizer.visualize_distributions(studies)
+            # 適格基準の分析と総合要約を実行
+            ResultAnalyzer.analyze_and_summarize(
+                studies, 
+                p, 
+                llm, 
+                COMPREHENSIVE_SUMMARY_PROMPT
             )
             st.session_state.analysis_complete = True
     
-    # 適格基準の分析
-    if st.session_state.analysis_complete:
-        ResultAnalyzer.analyze_eligibility_criteria(
-            studies,
-            llm,
-            CRITERIA_PROMPT
-        )
-    
     # プロトコル生成支援
-    if st.session_state.analysis_complete:
-        ProtocolGenerator.render_protocol_form(
-            studies,
-            llm,
-            PROTOCOL_PROMPT
-        )
+    # if st.session_state.analysis_complete:
+    #     ProtocolGenerator.render_protocol_form(
+    #         studies,
+    #         llm,
+    #         PROTOCOL_PROMPT
+    #     )
 
 def main():
     """

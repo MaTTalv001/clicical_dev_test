@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+import random
+from collections import Counter
 from utils.visualizer import Visualizer
 
 class ResultAnalyzer:
@@ -367,3 +369,136 @@ class ResultAnalyzer:
         副次評価項目: {', '.join(study['outcomes']['secondary'])}
         適格基準: {study['eligibility']['criteria']}
         """
+    
+    @staticmethod
+    def analyze_criteria(studies):
+        """
+        適格基準の分析を行い、データフレームの表示とサマリーテキストを返す
+        """
+        st.subheader("2. 適格基準の分析")
+        if not studies:
+            return None
+
+        # データ収集
+        age_ranges = []
+        gender_distribution = []
+        eligibility_samples = []
+
+        for study in studies:
+            eligibility = study['eligibility']
+            
+            # 年齢情報の収集
+            min_age = eligibility.get('minimum_age', 'Not specified')
+            max_age = eligibility.get('maximum_age', 'Not specified')
+            if min_age != 'Not specified' or max_age != 'Not specified':
+                age_ranges.append(f"{min_age} - {max_age}")
+            
+            # 性別情報の収集
+            gender = eligibility.get('sex', 'Not specified')
+            if gender != 'Not specified':
+                gender_distribution.append(gender)
+
+            # 適格基準テキストの収集
+            if eligibility.get('criteria'):
+                eligibility_samples.append(eligibility['criteria'])
+
+        # 年齢条件の分析
+        age_df = pd.DataFrame({
+            '年齢条件': age_ranges
+        }).value_counts().reset_index()
+        age_df.columns = ['年齢条件', '件数']
+        age_df['割合(%)'] = (age_df['件数'] / len(age_ranges) * 100).round(1)
+        age_df = age_df.head(10)
+
+        # 性別条件の分析
+        gender_df = pd.DataFrame({
+            '性別条件': gender_distribution
+        }).value_counts().reset_index()
+        gender_df.columns = ['性別条件', '件数']
+        gender_df['割合(%)'] = (gender_df['件数'] / len(gender_distribution) * 100).round(1)
+
+        # 結果の表示
+        st.write("#### 年齢条件（上位10パターン）")
+        st.dataframe(age_df, hide_index=True)
+        
+        st.write("\n#### 性別条件")
+        st.dataframe(gender_df, hide_index=True)
+        
+        st.write("\n#### 適格基準の例（ランダムに10件抽出）")
+        if eligibility_samples:
+            # 最大10件のサンプルをランダムに選択
+            sample_size = min(10, len(eligibility_samples))
+            selected_samples = random.sample(eligibility_samples, sample_size)
+            
+            for i, sample in enumerate(selected_samples, 1):
+                with st.expander(f"例 {i}"):
+                    st.write(sample)
+
+        # LLMへの入力用に集計データを整形
+        summary_text = f"""
+        年齢条件の上位3パターン: {', '.join([f"{row['年齢条件']} ({row['件数']}件, {row['割合(%)']:.1f}%)" for _, row in age_df.head(3).iterrows()])}
+        性別条件の分布: {', '.join([f"{row['性別条件']} ({row['件数']}件, {row['割合(%)']:.1f}%)" for _, row in gender_df.iterrows()])}
+        """
+
+        return summary_text
+    
+    @staticmethod
+    def generate_comprehensive_summary(studies, p, criteria_analysis, llm, comprehensive_summary_prompt):
+        """
+        総合的な要約の生成と表示を行う
+        """
+        st.subheader("3. 総合的な要約")
+        
+        # 介入データと評価項目の収集（visualize_distributionsと同様の処理）
+        interventions = []
+        primary_outcomes = []
+        secondary_outcomes = []
+        
+        for study in studies:
+            if 'interventions' in study:
+                for intervention in study['interventions']:
+                    if 'name' in intervention:
+                        interventions.append(intervention['name'])
+            
+            if 'outcomes' in study:
+                if 'primary' in study['outcomes']:
+                    primary_outcomes.extend(study['outcomes']['primary'])
+                if 'secondary' in study['outcomes']:
+                    secondary_outcomes.extend(study['outcomes']['secondary'])
+        
+        # 各項目の集計
+        intervention_counts = Counter(interventions).most_common(5)
+        primary_outcome_counts = Counter(primary_outcomes).most_common(5)
+        secondary_outcome_counts = Counter(secondary_outcomes).most_common(5)
+        
+        # 集計データを文字列に整形
+        interventions_text = "\n".join([f"- {name}: {count}件" for name, count in intervention_counts])
+        primary_outcomes_text = "\n".join([f"- {outcome}: {count}件" for outcome, count in primary_outcome_counts])
+        secondary_outcomes_text = "\n".join([f"- {outcome}: {count}件" for outcome, count in secondary_outcome_counts])
+        
+        summary_prompt = comprehensive_summary_prompt.format(
+            num_studies=len(studies),
+            p=p,
+            interventions=interventions_text,
+            primary_outcomes=primary_outcomes_text,
+            secondary_outcomes=secondary_outcomes_text,
+            criteria_analysis=criteria_analysis
+        )
+        
+        response = llm.invoke(summary_prompt)
+        st.write(response.content)
+
+    @staticmethod
+    def analyze_and_summarize(studies, p, llm, comprehensive_summary_prompt):
+        """
+        適格基準の分析と総合的な要約を連続して実行する統合メソッド
+        """
+        criteria_analysis = ResultAnalyzer.analyze_criteria(studies)
+        if criteria_analysis:
+            ResultAnalyzer.generate_comprehensive_summary(
+                studies, 
+                p, 
+                criteria_analysis, 
+                llm, 
+                comprehensive_summary_prompt
+            )
