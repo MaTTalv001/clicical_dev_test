@@ -141,6 +141,8 @@ class ResultAnalyzer:
         st.subheader("評価対象医薬品の分布")
         fig1, drug_df = Visualizer.plot_drug_distribution(top_interventions)
         st.plotly_chart(fig1, use_container_width=True)
+        st.subheader("Top 5 Evaluated Drugs:")
+        st.dataframe(drug_df, hide_index=True)
 
         st.subheader("主要評価項目の分布")
         fig2, outcome_df = Visualizer.plot_outcome_distribution(top_primary_outcomes)
@@ -151,10 +153,10 @@ class ResultAnalyzer:
         st.write(summary)
 
         st.subheader("Top 5 Evaluated Drugs:")
-        st.table(drug_df)
+        st.dataframe(drug_df, hide_index=True)
 
         st.subheader("Top 5 Primary Outcomes:")
-        st.table(outcome_df)
+        st.dataframe(outcome_df, hide_index=True)
 
         # 選択された試験の横断的な要約
         ResultAnalyzer._analyze_selected_studies(studies, llm)
@@ -375,7 +377,7 @@ class ResultAnalyzer:
         """
         適格基準の分析を行い、データフレームの表示とサマリーテキストを返す
         """
-        st.subheader("2. 適格基準の分析")
+        st.subheader("適格基準の分析")
         if not studies:
             return None
 
@@ -404,11 +406,11 @@ class ResultAnalyzer:
 
         # 年齢条件の分析
         age_df = pd.DataFrame({
-            '年齢条件': age_ranges
+        '年齢条件': age_ranges
         }).value_counts().reset_index()
         age_df.columns = ['年齢条件', '件数']
         age_df['割合(%)'] = (age_df['件数'] / len(age_ranges) * 100).round(1)
-        age_df = age_df.head(10)
+        age_df = age_df.head(10).sort_values('件数', ascending=False)  # 降順にソート
 
         # 性別条件の分析
         gender_df = pd.DataFrame({
@@ -418,15 +420,22 @@ class ResultAnalyzer:
         gender_df['割合(%)'] = (gender_df['件数'] / len(gender_distribution) * 100).round(1)
 
         # 結果の表示
-        st.write("#### 年齢条件（上位10パターン）")
+        st.write("#### 年齢条件の分布")
+        # グラフの表示
+        age_fig = Visualizer.plot_age_distribution(age_df)
+        st.plotly_chart(age_fig, use_container_width=True)
+        # テーブルの表示
         st.dataframe(age_df, hide_index=True)
         
-        st.write("\n#### 性別条件")
+        st.write("\n#### 性別条件の分布")
+        # グラフの表示
+        gender_fig = Visualizer.plot_gender_distribution(gender_df)
+        st.plotly_chart(gender_fig, use_container_width=True)
+        # テーブルの表示
         st.dataframe(gender_df, hide_index=True)
         
         st.write("\n#### 適格基準の例（ランダムに10件抽出）")
         if eligibility_samples:
-            # 最大10件のサンプルをランダムに選択
             sample_size = min(10, len(eligibility_samples))
             selected_samples = random.sample(eligibility_samples, sample_size)
             
@@ -434,7 +443,6 @@ class ResultAnalyzer:
                 with st.expander(f"例 {i}"):
                     st.write(sample)
 
-        # LLMへの入力用に集計データを整形
         summary_text = f"""
         年齢条件の上位3パターン: {', '.join([f"{row['年齢条件']} ({row['件数']}件, {row['割合(%)']:.1f}%)" for _, row in age_df.head(3).iterrows()])}
         性別条件の分布: {', '.join([f"{row['性別条件']} ({row['件数']}件, {row['割合(%)']:.1f}%)" for _, row in gender_df.iterrows()])}
