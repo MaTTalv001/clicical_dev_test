@@ -153,60 +153,80 @@ def main():
             generate_protocol_draft(st.session_state.structured_studies)
 
 def input_pico_form():
-   """PICO形式での入力フォームを提供"""
-   with st.form(key='pico_form'):
-       p = st.text_input("Patient (対象患者):", key='p')
-       i = st.text_input("Intervention (介入):", key='i')
-       c = st.text_input("Comparison (比較対象):", key='c')
-       o = st.text_input("Outcome (結果):", key='o')
-       
-       # 試験開始期間
-       st.write("試験開始期間")
-       start_cols = st.columns(2)
-       with start_cols[0]:
-           start_date_min = st.date_input(
-               "開始日（From）",
-               value=datetime.date(2010, 1, 1),
-               min_value=datetime.date(2000, 1, 1),
-               max_value=datetime.date.today(),
-               key='start_date_min'
-           )
-       with start_cols[1]:
-           start_date_max = st.date_input(
-               "開始日（To）",
-               value=datetime.date(2018, 12, 31),
-               min_value=datetime.date(2000, 1, 1),
-               max_value=datetime.date.today(),
-               key='start_date_max'
-           )
-       
-       # 試験完了期間
-       st.write("試験完了期間")
-       end_cols = st.columns(2)
-       with end_cols[0]:
-           end_date_min = st.date_input(
-               "完了日（From）",
-               value=datetime.date(2010, 1, 1),
-               min_value=datetime.date(2000, 1, 1),
-               max_value=datetime.date.today(),
-               key='end_date_min'
-           )
-       with end_cols[1]:
-           end_date_max = st.date_input(
-               "完了日（To）",
-               value=datetime.date(2018, 12, 31),
-               min_value=datetime.date(2000, 1, 1),
-               max_value=datetime.date.today(),
-               key='end_date_max'
-           )
+    """PICO形式での入力フォームを提供"""
+    with st.form(key='pico_form'):
+        p = st.text_input(
+            "Patient (対象患者):", 
+            key='p',
+            placeholder="例: 2型糖尿病の成人患者"
+        )
+        i = st.text_input(
+            "Intervention (介入):", 
+            key='i',
+            placeholder="例: DPP-4阻害薬"
+        )
+        c = st.text_input(
+            "Comparison (比較対象):", 
+            key='c',
+            placeholder="例: プラセボ、または標準治療"
+        )
+        o = st.text_input(
+            "Outcome (結果):", 
+            key='o',
+            placeholder="例: HbA1cの改善"
+        )
+        
+        # 試験開始期間
+        st.write("試験開始期間")
+        start_cols = st.columns(2)
+        with start_cols[0]:
+            start_date_min = st.date_input(
+                "開始日（From）",
+                value=None,
+                min_value=datetime.date(2000, 1, 1),
+                max_value=datetime.date.today(),
+                key='start_date_min'
+            )
+        with start_cols[1]:
+            start_date_max = st.date_input(
+                "開始日（To）",
+                value=None,
+                min_value=datetime.date(2000, 1, 1),
+                max_value=datetime.date.today(),
+                key='start_date_max'
+            )
+        
+        # 試験完了期間
+        st.write("試験完了期間")
+        end_cols = st.columns(2)
+        with end_cols[0]:
+            end_date_min = st.date_input(
+                "完了日（From）",
+                value=None,
+                min_value=datetime.date(2000, 1, 1),
+                max_value=datetime.date.today(),
+                key='end_date_min'
+            )
+        with end_cols[1]:
+            end_date_max = st.date_input(
+                "完了日（To）",
+                value=None,
+                min_value=datetime.date(2000, 1, 1),
+                max_value=datetime.date.today(),
+                key='end_date_max'
+            )
 
-       additional = st.text_input("Additional conditions (その他の追加条件):", key='additional')
-       submitted = st.form_submit_button(label='検索')
-       
-   return submitted, p, i, c, o, {
-       'start_date_range': (start_date_min, start_date_max),
-       'end_date_range': (end_date_min, end_date_max)
-   }, additional
+        additional = st.text_input(
+            "Additional conditions (その他の追加条件):", 
+            key='additional',
+            placeholder="例: 18歳以上、BMI 25以上"
+        )
+        submitted = st.form_submit_button(label='検索')
+        
+    return submitted, p, i, c, o, {
+        'start_date_range': (start_date_min, start_date_max),
+        'end_date_range': (end_date_min, end_date_max)
+    }, additional
 
 def generate_query(p, i, c, o, date_ranges, additional):
     """LLMを使用して検索クエリを生成"""
@@ -340,7 +360,7 @@ def display_results(studies, total_count):
     )
 
     # 検索結果一覧
-    st.subheader("個別試験の要約(Optional)")
+    st.subheader("個別試験の確認(Optional)")
     study_options = [f"{study['nct_id']}: {study['title']}" for study in studies if study['title']]
     st.session_state.selected_studies = st.multiselect("詳細を確認したい試験を選択してください:", study_options, key='study_selector', default=st.session_state.selected_studies)
 
@@ -404,11 +424,11 @@ def analyze_studies(studies, p):
     # 可視化
     st.subheader("評価対象医薬品の分布")
     fig1, drug_df = Visualizer.plot_drug_distribution(top_interventions)
-    st.pyplot(fig1)
+    st.plotly_chart(fig1, use_container_width=True)
 
     st.subheader("主要評価項目の分布")
     fig2, outcome_df = Visualizer.plot_outcome_distribution(top_primary_outcomes)
-    st.pyplot(fig2)
+    st.plotly_chart(fig2, use_container_width=True)
 
     # 結果の出力
     st.subheader("全体の要約")
