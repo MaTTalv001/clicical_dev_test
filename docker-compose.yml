@@ -1,18 +1,15 @@
-version: '3.8'
-
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
     volumes:
-      - ./datasets:/app/datasets
-      - ./vectorstore:/app/vectorstore
-      - ~/.aws:/root/.aws:ro  # ホストのAWS設定をコンテナにマウント
+      - ~/.aws:/root/.aws:ro
+      - .:/app
     ports:
       - "8501:8501"
     environment:
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
-    command: ./startup.sh
+    command: sh ./startup.sh # shを使って実行
